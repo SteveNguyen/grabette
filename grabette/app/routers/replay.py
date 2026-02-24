@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from grabette.app.dependencies import get_daemon
@@ -61,3 +62,56 @@ async def seek_replay(body: ReplaySeekRequest, daemon: Daemon = Depends(get_daem
 @router.get("/status")
 def replay_status(daemon: Daemon = Depends(get_daemon)):
     return daemon.replay_status
+
+
+# ── Video replay page ──────────────────────────────────────────────
+
+REPLAY_VIDEO_HTML = """\
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<style>
+body{margin:0;background:#000;overflow:hidden;display:flex;align-items:center;justify-content:center;height:100vh}
+video{max-width:100%;max-height:100%;object-fit:contain}
+#msg{color:#888;font:14px monospace;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)}
+</style>
+</head><body>
+<video id="v" muted></video>
+<div id="msg">Loading...</div>
+<script>
+(function(){
+  var params=new URLSearchParams(location.search);
+  var sid=params.get('session_id');
+  var v=document.getElementById('v');
+  var msg=document.getElementById('msg');
+  if(!sid){msg.textContent='No session';return;}
+  v.src='/api/sessions/'+encodeURIComponent(sid)+'/video';
+  v.load();
+  var wasPlaying=false, synced=false;
+
+  setInterval(function(){
+    fetch('/api/replay/status').then(function(r){return r.ok?r.json():null;})
+    .then(function(st){
+      if(!st)return;
+      if(!st.active){msg.textContent='Replay ended';v.pause();return;}
+      msg.style.display='none';
+      var target=st.time_ms/1000;
+      // Sync on seek or large drift
+      if(Math.abs(v.currentTime-target)>0.5||!synced){
+        v.currentTime=target;
+        synced=true;
+      }
+      if(st.playing&&v.paused){v.play().catch(function(){});}
+      if(!st.playing&&!v.paused){v.pause();}
+      wasPlaying=st.playing;
+    }).catch(function(){});
+  },200);
+})();
+</script>
+</body></html>"""
+
+
+@router.get("/video")
+async def replay_video_page():
+    """Serve the video replay player page (embedded in iframe)."""
+    return HTMLResponse(content=REPLAY_VIDEO_HTML)

@@ -198,41 +198,65 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
         return f"Pending: {latest.get('message', '')}"
 
     # Replay
+    def _video_iframe(session_id: str) -> str:
+        return (
+            f'<iframe src="/api/replay/video?session_id={session_id}" '
+            'style="width:100%;height:350px;border:none;'
+            'border-radius:8px;background:#000;"></iframe>'
+        )
+
     def on_replay_start(session_id: str | None):
         if not session_id:
-            return "No session selected", gr.update(visible=False), gr.update(), gr.update()
+            return ("No session selected", gr.update(visible=False),
+                    gr.update(), gr.update(),
+                    gr.update(), gr.update())
         result = client.replay_start(session_id)
         if "error" in result:
-            return f"Error: {result['error']}", gr.update(visible=False), gr.update(), gr.update()
+            return (f"Error: {result['error']}", gr.update(visible=False),
+                    gr.update(), gr.update(),
+                    gr.update(), gr.update())
         dur = result.get("duration_ms", 0)
         return (
             f"Replaying {session_id}",
-            gr.update(visible=True),
-            gr.update(maximum=dur, value=0),
-            gr.update(active=True),
+            gr.update(visible=True),       # replay_panel
+            gr.update(maximum=dur, value=0),  # replay_slider
+            gr.update(active=True),         # replay_timer
+            gr.update(visible=False),       # camera_img
+            gr.update(visible=True, value=_video_iframe(session_id)),  # replay_video
         )
 
     def on_replay_stop():
         client.replay_stop()
         return (
             "Replay stopped",
-            gr.update(visible=False),
-            gr.update(active=False),
+            gr.update(visible=False),   # replay_panel
+            gr.update(active=False),    # replay_timer
+            gr.update(visible=True),    # camera_img
+            gr.update(visible=False, value=""),  # replay_video
         )
 
-    def on_replay_pause_play(currently_playing: bool):
-        if currently_playing:
+    def on_replay_pause_play():
+        """Toggle pause/play by checking current status from the API."""
+        st = client.replay_status()
+        if st.get("playing"):
             client.replay_pause()
+            return "Play"
         else:
             client.replay_resume()
+            return "Pause"
 
-    def on_replay_seek(time_ms: float):
-        client.replay_seek(time_ms)
+    def on_replay_seek(time_ms):
+        if time_ms is not None:
+            client.replay_seek(float(time_ms))
 
     def poll_replay_status():
         st = client.replay_status()
         if not st.get("active"):
-            return gr.update(), gr.update(), gr.update(active=False), gr.update(visible=False)
+            return (
+                gr.update(), gr.update(), gr.update(),
+                gr.update(active=False), gr.update(visible=False),
+                gr.update(visible=True), gr.update(visible=False, value=""),
+            )
         t = st.get("time_ms", 0)
         dur = st.get("duration_ms", 0)
         playing = st.get("playing", False)
@@ -241,8 +265,11 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
         return (
             gr.update(value=t),
             label,
+            btn_label,
             gr.update(),  # keep timer active
             gr.update(),  # keep panel visible
+            gr.update(),  # camera_img unchanged
+            gr.update(),  # replay_video unchanged
         )
 
     # ── Build layout ──────────────────────────────────────────────────
@@ -257,6 +284,7 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
                     label="Camera Live View",
                     height=350,
                 )
+                replay_video = gr.HTML(visible=False)
             with gr.Column(scale=1):
                 viewer_iframe = gr.HTML(
                     value=(
@@ -335,8 +363,6 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
             with gr.Row():
                 replay_pause_btn = gr.Button("Pause", size="sm")
                 replay_stop_btn = gr.Button("Stop Replay", variant="stop", size="sm")
-        # Hidden state to track playing
-        replay_playing_state = gr.State(True)
         replay_timer = gr.Timer(0.5, active=False)
 
         # ── HuggingFace ───────────────────────────────────────────────
@@ -393,23 +419,23 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
         # Replay
         replay_btn.click(
             fn=on_replay_start, inputs=session_dd,
-            outputs=[del_msg, replay_panel, replay_slider, replay_timer],
+            outputs=[del_msg, replay_panel, replay_slider, replay_timer,
+                     camera_img, replay_video],
         )
         replay_stop_btn.click(
             fn=on_replay_stop,
-            outputs=[del_msg, replay_panel, replay_timer],
+            outputs=[del_msg, replay_panel, replay_timer,
+                     camera_img, replay_video],
         )
         replay_pause_btn.click(
-            fn=on_replay_pause_play, inputs=replay_playing_state,
-        ).then(
-            fn=lambda playing: (not playing, "Play" if playing else "Pause"),
-            inputs=replay_playing_state,
-            outputs=[replay_playing_state, replay_pause_btn],
+            fn=on_replay_pause_play,
+            outputs=replay_pause_btn,
         )
-        replay_slider.release(fn=on_replay_seek, inputs=replay_slider)
+        replay_slider.release(fn=on_replay_seek, inputs=[replay_slider])
         replay_timer.tick(
             fn=poll_replay_status,
-            outputs=[replay_slider, replay_time_label, replay_timer, replay_panel],
+            outputs=[replay_slider, replay_time_label, replay_pause_btn,
+                     replay_timer, replay_panel, camera_img, replay_video],
         )
 
         # HuggingFace

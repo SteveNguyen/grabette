@@ -64,6 +64,15 @@ def download_session(session_id: str, sm: SessionManager = Depends(get_session_m
     )
 
 
+@router.get("/{session_id}/video")
+def stream_video(session_id: str, sm: SessionManager = Depends(get_session_manager)):
+    session_dir = sm._session_dir(session_id)
+    video_path = session_dir / "raw_video.mp4"
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Video not found")
+    return FileResponse(video_path, media_type="video/mp4")
+
+
 @router.delete("/{session_id}")
 def delete_session(session_id: str, sm: SessionManager = Depends(get_session_manager)):
     try:

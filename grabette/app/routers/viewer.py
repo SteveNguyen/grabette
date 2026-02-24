@@ -261,17 +261,21 @@ window.addEventListener('message', e => {
   gotPostMessage = true;
 });
 
-// Self-poll /api/state when not receiving postMessage
+// Self-poll /api/state/history when not receiving postMessage
+// Uses the same history endpoint as charts so it sees replay data automatically
 function startPolling() {
+  let cur = 0;
   setInterval(async () => {
     if (gotPostMessage) return;
     try {
-      const resp  = await fetch('/api/state');
-      const state = await resp.json();
-      if (state.angle) {
-        setJoint('proximal', -state.angle.proximal);
-        setJoint('distal',   -state.angle.distal);
-        updateStatus(state.angle.proximal, state.angle.distal);
+      const resp = await fetch('/api/state/history?cursor=' + cur);
+      const data = await resp.json();
+      if (data.cursor) cur = data.cursor;
+      if (data.angle && data.angle.length) {
+        const latest = data.angle[data.angle.length - 1];
+        setJoint('proximal', -latest.p);
+        setJoint('distal',   -latest.d);
+        updateStatus(latest.p, latest.d);
       }
     } catch (_) {}
   }, 500);
