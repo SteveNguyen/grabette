@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from grabette.config import settings
 from grabette.daemon import Daemon
@@ -113,12 +115,21 @@ def create_app() -> FastAPI:
             content={"detail": "Internal server error"},
         )
 
+    from grabette.app.routers.viewer import router as viewer_router
+
     app.include_router(daemon_router)
     app.include_router(state_router)
     app.include_router(sessions_router)
     app.include_router(camera_router)
     app.include_router(hf_router)
     app.include_router(system_router)
+    app.include_router(viewer_router)
+
+    # Serve URDF model + STL meshes as static files
+    _urdf_dir = Path(__file__).resolve().parent.parent.parent / "urdf"
+    if _urdf_dir.is_dir():
+        app.mount("/urdf", StaticFiles(directory=str(_urdf_dir)), name="urdf")
+        logger.info("URDF assets mounted at /urdf from %s", _urdf_dir)
 
     # Mount Gradio UI if enabled and installed
     if settings.ui_enabled:

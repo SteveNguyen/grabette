@@ -26,17 +26,31 @@ def get_client() -> GrabetteClient | None:
 def connect(url: str):
     """Connect to a grabette robot API."""
     global _client
-    url = url.strip()
+    url = url.strip().rstrip("/")
     if not url:
         _client = None
-        return "Disconnected"
+        return "Disconnected", _viewer_placeholder()
     _client = GrabetteClient(base_url=url)
     info = _client.get_system_info()
     if info is None:
         _client = None
-        return f"Failed to connect to {url}"
+        return f"Failed to connect to {url}", _viewer_placeholder()
     host = info.get("hostname", "?")
-    return f"Connected to {host} ({url})"
+    viewer_html = (
+        f'<iframe src="{url}/viewer" '
+        'style="width:100%;height:350px;border:none;'
+        'border-radius:8px;background:#1a1a2e;"></iframe>'
+    )
+    return f"Connected to {host} ({url})", viewer_html
+
+
+def _viewer_placeholder():
+    return (
+        '<div style="width:100%;height:350px;border-radius:8px;'
+        'background:#1a1a2e;display:flex;align-items:center;'
+        'justify-content:center;color:#556688;font:14px monospace;">'
+        'Connect to robot to load 3D model</div>'
+    )
 
 
 # ── Callbacks ─────────────────────────────────────────────────────────
@@ -269,11 +283,16 @@ with gr.Blocks(title="Grabette") as demo:
     )
 
     # ── Live view ─────────────────────────────────────────────────
-    with gr.Row():
-        with gr.Column(scale=2):
+    with gr.Row(equal_height=True):
+        with gr.Column(scale=1):
             camera_img = gr.Image(
                 label="Camera Live View",
-                height=480,
+                height=350,
+            )
+        with gr.Column(scale=1):
+            viewer_iframe = gr.HTML(
+                value=_viewer_placeholder(),
+                label="3D Model",
             )
         with gr.Column(scale=1):
             imu_box = gr.Textbox(
@@ -283,7 +302,7 @@ with gr.Blocks(title="Grabette") as demo:
                 label="Angle Sensors", lines=2, interactive=False,
             )
             capture_box = gr.Textbox(
-                label="Capture Status", lines=3, interactive=False,
+                label="Capture Status", lines=4, interactive=False,
             )
             with gr.Row():
                 start_btn = gr.Button("Start Capture", variant="primary")
@@ -343,7 +362,10 @@ with gr.Blocks(title="Grabette") as demo:
     # ── Wire events ───────────────────────────────────────────────
 
     # Connection
-    connect_btn.click(fn=connect, inputs=url_input, outputs=connection_status)
+    connect_btn.click(
+        fn=connect, inputs=url_input,
+        outputs=[connection_status, viewer_iframe],
+    )
 
     # Capture
     start_btn.click(fn=on_start_capture, outputs=capture_msg)
@@ -385,7 +407,10 @@ with gr.Blocks(title="Grabette") as demo:
 
     # Auto-connect if URL was provided via env var
     if _default_url:
-        demo.load(fn=lambda: connect(_default_url), outputs=connection_status)
+        demo.load(
+            fn=lambda: connect(_default_url),
+            outputs=[connection_status, viewer_iframe],
+        )
         demo.load(fn=refresh_sessions, outputs=[sessions_table, session_dd])
         demo.load(fn=check_hf_auth, outputs=hf_status)
 

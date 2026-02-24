@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 
 import gradio as gr
@@ -38,7 +39,8 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
     def get_sensor_state():
         state = client.get_state()
         if state is None:
-            return "Disconnected", "Disconnected", "Disconnected", gr.update(active=True)
+            return ("Disconnected", "Disconnected", "Disconnected",
+                    gr.update(active=True))
 
         # IMU
         imu = state.get("imu")
@@ -202,11 +204,20 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
         gr.Markdown("# GRABETTE")
 
         # ── Live view ─────────────────────────────────────────────────
-        with gr.Row():
-            with gr.Column(scale=2):
+        with gr.Row(equal_height=True):
+            with gr.Column(scale=1):
                 camera_img = gr.Image(
                     label="Camera Live View",
-                    height=480,
+                    height=350,
+                )
+            with gr.Column(scale=1):
+                viewer_iframe = gr.HTML(
+                    value=(
+                        '<iframe id="urdf-viewer" src="/viewer" '
+                        'style="width:100%;height:350px;border:none;'
+                        'border-radius:8px;background:#1a1a2e;"></iframe>'
+                    ),
+                    label="3D Model",
                 )
             with gr.Column(scale=1):
                 imu_box = gr.Textbox(
@@ -221,7 +232,7 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
                 )
                 capture_box = gr.Textbox(
                     label="Capture Status",
-                    lines=3,
+                    lines=4,
                     interactive=False,
                 )
                 with gr.Row():
