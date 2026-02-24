@@ -80,14 +80,16 @@ class ReplayEngine:
             })
         self._imu_times = [s["t"] for s in self._imu_samples]
 
-        # Parse angle samples
+        # Parse angle samples — indices swapped to match live convention
+        # (in imu_data.json value=[sensor1, sensor2], but live maps
+        #  proximal=value[1], distal=value[0])
         self._angle_samples = []
         for s in angl_samples:
             v = s["value"]
             self._angle_samples.append({
                 "t": s["cts"],
-                "p": v[0],
-                "d": v[1],
+                "p": v[1],
+                "d": v[0],
             })
         self._angle_times = [s["t"] for s in self._angle_samples]
 
