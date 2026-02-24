@@ -11,8 +11,8 @@ class IMUSample(BaseModel):
 
 class AngleSample(BaseModel):
     timestamp_ms: float
-    angle1: float  # radians
-    angle2: float  # radians
+    proximal: float  # radians
+    distal: float  # radians
 
 
 class CaptureStatus(BaseModel):

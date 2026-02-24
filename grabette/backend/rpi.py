@@ -91,8 +91,8 @@ class RpiBackend(Backend):
                 last = self._angle._samples.samples[-1]
                 angle = AngleSample(
                     timestamp_ms=last["cts"],
-                    angle1=last["value"][0],
-                    angle2=last["value"][1],
+                    proximal=last["value"][1],
+                    distal=last["value"][0],
                 )
         else:
             # When idle, read directly from sensors
@@ -115,8 +115,8 @@ class RpiBackend(Backend):
                     cal2 = self._angle._normalize_angle(raw2 - self._angle._offset_2_deg)
                     angle = AngleSample(
                         timestamp_ms=time.time() * 1000,
-                        angle1=math.radians(cal1),
-                        angle2=math.radians(cal2),
+                        proximal=math.radians(cal2),
+                        distal=math.radians(cal1),
                     )
                 except Exception:
                     pass

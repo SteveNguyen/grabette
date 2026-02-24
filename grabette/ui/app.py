@@ -58,11 +58,11 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
         angle = state.get("angle")
         if angle:
             import math
-            a1_deg = math.degrees(angle["angle1"])
-            a2_deg = math.degrees(angle["angle2"])
+            p_deg = math.degrees(angle["proximal"])
+            d_deg = math.degrees(angle["distal"])
             angle_text = (
-                f"Sensor 1: {a1_deg:+7.2f}\u00b0  ({angle['angle1']:+.4f} rad)\n"
-                f"Sensor 2: {a2_deg:+7.2f}\u00b0  ({angle['angle2']:+.4f} rad)"
+                f"Proximal: {p_deg:+7.2f}\u00b0  ({angle['proximal']:+.4f} rad)\n"
+                f"Distal:   {d_deg:+7.2f}\u00b0  ({angle['distal']:+.4f} rad)"
             )
         else:
             angle_text = "No angle data"

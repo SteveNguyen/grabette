@@ -27,7 +27,7 @@ def write_imu_json(
         gyro_samples: Gyroscope samples with 'cts' (ms) and 'value' [gx, gy, gz] in rad/s.
         fps: Video frame rate (used by SLAM to compute frame timestamps).
         output_path: Output file path for imu_data.json.
-        angle_samples: Optional angle sensor samples with 'cts' (ms) and 'value' [angle1, angle2] in rad.
+        angle_samples: Optional angle sensor samples with 'cts' (ms) and 'value' [proximal, distal] in rad.
     """
     streams = {
         "ACCL": {

@@ -54,8 +54,8 @@ class MockBackend(Backend):
         t = time.time() - (self._start_time or time.time())
         angle = AngleSample(
             timestamp_ms=now_ms,
-            angle1=math.sin(t * 0.1) * 0.5,
-            angle2=math.cos(t * 0.15) * 0.3,
+            proximal=math.sin(t * 0.1) * 0.5,
+            distal=math.cos(t * 0.15) * 0.3,
         )
         return SensorState(
             imu=imu,

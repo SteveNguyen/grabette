@@ -269,9 +269,9 @@ function startPolling() {
       const resp  = await fetch('/api/state');
       const state = await resp.json();
       if (state.angle) {
-        setJoint('proximal', state.angle.angle1);
-        setJoint('distal',   state.angle.angle2);
-        updateStatus(state.angle.angle1, state.angle.angle2);
+        setJoint('proximal', state.angle.proximal);
+        setJoint('distal',   state.angle.distal);
+        updateStatus(state.angle.proximal, state.angle.distal);
       }
     } catch (_) {}
   }, 500);
