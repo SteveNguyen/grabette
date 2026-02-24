@@ -255,8 +255,8 @@ let gotPostMessage = false;
 window.addEventListener('message', e => {
   if (!e.data || typeof e.data !== 'object') return;
   const { proximal, distal } = e.data;
-  if (proximal !== undefined) setJoint('proximal', proximal);
-  if (distal   !== undefined) setJoint('distal',   distal);
+  if (proximal !== undefined) setJoint('proximal', -proximal);
+  if (distal   !== undefined) setJoint('distal',   -distal);
   updateStatus(proximal, distal);
   gotPostMessage = true;
 });
@@ -269,8 +269,8 @@ function startPolling() {
       const resp  = await fetch('/api/state');
       const state = await resp.json();
       if (state.angle) {
-        setJoint('proximal', state.angle.proximal);
-        setJoint('distal',   state.angle.distal);
+        setJoint('proximal', -state.angle.proximal);
+        setJoint('distal',   -state.angle.distal);
         updateStatus(state.angle.proximal, state.angle.distal);
       }
     } catch (_) {}
