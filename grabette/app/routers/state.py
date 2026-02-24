@@ -4,8 +4,9 @@ import asyncio
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
-from grabette.app.dependencies import get_backend
+from grabette.app.dependencies import get_backend, get_daemon
 from grabette.backend.base import Backend
+from grabette.daemon import Daemon
 
 router = APIRouter(prefix="/api/state", tags=["state"])
 
@@ -13,6 +14,11 @@ router = APIRouter(prefix="/api/state", tags=["state"])
 @router.get("")
 def get_state(backend: Backend = Depends(get_backend)):
     return backend.get_state()
+
+
+@router.get("/history")
+def get_state_history(daemon: Daemon = Depends(get_daemon)):
+    return daemon.sample_ring.drain()
 
 
 @router.websocket("/ws")

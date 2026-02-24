@@ -27,8 +27,8 @@ IMU_CHART_HTML = f"""\
 <div id="accel"></div>
 <div id="gyro" style="margin-top:2px"></div>
 <script>
-var MAXLEN=30;
-function roll(a,v){{a.push(v);if(a.length>MAXLEN)a.shift();}}
+var MAXLEN=750;
+function clip(a){{while(a.length>MAXLEN)a.shift();}}
 var iT=[],ax=[],ay=[],az=[],gx=[],gy=[],gz=[],t0=null;
 
 (function init(){{
@@ -60,18 +60,21 @@ var iT=[],ax=[],ay=[],az=[],gx=[],gy=[],gz=[],t0=null;
   }}).observe(document.body);
 
   setInterval(function(){{
-    fetch('/api/state').then(function(r){{return r.ok?r.json():null;}})
-    .then(function(s){{
-      if(!s||!s.imu)return;
-      var now=performance.now()/1000;
-      if(t0===null)t0=now;var t=now-t0;
-      var a=s.imu.accel,g=s.imu.gyro;
-      roll(iT,t);roll(ax,a[0]);roll(ay,a[1]);roll(az,a[2]);
-      roll(gx,g[0]);roll(gy,g[1]);roll(gz,g[2]);
+    fetch('/api/state/history').then(function(r){{return r.ok?r.json():null;}})
+    .then(function(d){{
+      if(!d||!d.imu||!d.imu.length)return;
+      for(var i=0;i<d.imu.length;i++){{
+        var s=d.imu[i];
+        if(t0===null)t0=s.t;
+        var t=(s.t-t0)/1000;
+        iT.push(t);ax.push(s.a[0]);ay.push(s.a[1]);az.push(s.a[2]);
+        gx.push(s.g[0]);gy.push(s.g[1]);gz.push(s.g[2]);
+      }}
+      clip(iT);clip(ax);clip(ay);clip(az);clip(gx);clip(gy);clip(gz);
       aC.setData([iT.slice(),ax.slice(),ay.slice(),az.slice()]);
       gC.setData([iT.slice(),gx.slice(),gy.slice(),gz.slice()]);
     }}).catch(function(){{}});
-  }},500);
+  }},1000);
 }})();
 </script>
 </body></html>"""
@@ -83,8 +86,8 @@ ANGLE_CHART_HTML = f"""\
 </head><body>
 <div id="angle"></div>
 <script>
-var MAXLEN=30;
-function roll(a,v){{a.push(v);if(a.length>MAXLEN)a.shift();}}
+var MAXLEN=750;
+function clip(a){{while(a.length>MAXLEN)a.shift();}}
 var aT=[],pr=[],di=[],t0=null;
 
 (function init(){{
@@ -106,17 +109,19 @@ var aT=[],pr=[],di=[],t0=null;
   }}).observe(document.body);
 
   setInterval(function(){{
-    fetch('/api/state').then(function(r){{return r.ok?r.json():null;}})
-    .then(function(s){{
-      if(!s||!s.angle)return;
-      var now=performance.now()/1000;
-      if(t0===null)t0=now;var t=now-t0;
-      var p=s.angle.proximal*180/Math.PI;
-      var d=s.angle.distal*180/Math.PI;
-      roll(aT,t);roll(pr,p);roll(di,d);
+    fetch('/api/state/history').then(function(r){{return r.ok?r.json():null;}})
+    .then(function(d){{
+      if(!d||!d.angle||!d.angle.length)return;
+      for(var i=0;i<d.angle.length;i++){{
+        var s=d.angle[i];
+        if(t0===null)t0=s.t;
+        var t=(s.t-t0)/1000;
+        aT.push(t);pr.push(s.p*180/Math.PI);di.push(s.d*180/Math.PI);
+      }}
+      clip(aT);clip(pr);clip(di);
       nC.setData([aT.slice(),pr.slice(),di.slice()]);
     }}).catch(function(){{}});
-  }},500);
+  }},1000);
 }})();
 </script>
 </body></html>"""
