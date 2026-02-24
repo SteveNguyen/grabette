@@ -9,16 +9,24 @@ class IMUSample(BaseModel):
     gyro: tuple[float, float, float]
 
 
+class AngleSample(BaseModel):
+    timestamp_ms: float
+    angle1: float  # radians
+    angle2: float  # radians
+
+
 class CaptureStatus(BaseModel):
     is_capturing: bool = False
     session_id: str | None = None
     duration_seconds: float = 0.0
     frame_count: int = 0
     imu_sample_count: int = 0
+    angle_sample_count: int = 0
 
 
 class SensorState(BaseModel):
     imu: IMUSample | None = None
+    angle: AngleSample | None = None
     capture: CaptureStatus = CaptureStatus()
 
 

@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # IMU
     imu_hz: int = 200
 
+    # Angle sensors (AS5600 on I2C buses 4 & 5)
+    angle_sensors: bool = True
+
     # UI
     ui_enabled: bool = True
 

@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import random
 import time
 from pathlib import Path
 
 from grabette.backend.base import Backend
-from grabette.models import CaptureStatus, IMUSample, SensorState
+from grabette.models import AngleSample, CaptureStatus, IMUSample, SensorState
 from grabette.output import write_imu_json
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ class MockBackend(Backend):
         self._capture_task: asyncio.Task | None = None
         self._frame_count = 0
         self._imu_sample_count = 0
+        self._angle_sample_count = 0
 
     async def start(self) -> None:
         self._running = True
@@ -48,8 +50,16 @@ class MockBackend(Backend):
             accel=(noise(), noise(), 9.81 + noise()),
             gyro=(noise(), noise(), noise()),
         )
+        # Simulate slow-drifting angle sensors
+        t = time.time() - (self._start_time or time.time())
+        angle = AngleSample(
+            timestamp_ms=now_ms,
+            angle1=math.sin(t * 0.1) * 0.5,
+            angle2=math.cos(t * 0.15) * 0.3,
+        )
         return SensorState(
             imu=imu,
+            angle=angle,
             capture=self.get_capture_status(),
         )
 
@@ -61,6 +71,7 @@ class MockBackend(Backend):
         self._capture_session_dir = session_dir
         self._frame_count = 0
         self._imu_sample_count = 0
+        self._angle_sample_count = 0
         self._capture_task = asyncio.create_task(self._mock_capture_loop())
         logger.info("MockBackend capture started → %s", session_dir)
 
@@ -70,6 +81,7 @@ class MockBackend(Backend):
             while self._capturing:
                 self._frame_count += int(FPS / 10)
                 self._imu_sample_count += int(IMU_HZ / 10)
+                self._angle_sample_count += 10  # ~100Hz
                 await asyncio.sleep(0.1)
         except asyncio.CancelledError:
             pass
@@ -96,6 +108,7 @@ class MockBackend(Backend):
         self._capture_session_dir = None
         self._frame_count = 0
         self._imu_sample_count = 0
+        self._angle_sample_count = 0
         logger.info("MockBackend capture stopped")
         return status
 
@@ -109,6 +122,7 @@ class MockBackend(Backend):
             duration_seconds=round(duration, 2),
             frame_count=self._frame_count,
             imu_sample_count=self._imu_sample_count,
+            angle_sample_count=self._angle_sample_count,
         )
 
     @property
@@ -186,7 +200,18 @@ class MockBackend(Backend):
             accel_samples.append({"cts": t, "value": [0.0, 0.0, 9.81]})
             gyro_samples.append({"cts": t, "value": [0.0, 0.0, 0.0]})
 
-        write_imu_json(accel_samples, gyro_samples, FPS, session_dir / "imu_data.json")
+        # Mock angle data
+        angle_samples = None
+        if status.angle_sample_count > 0:
+            angle_samples = []
+            for i in range(status.angle_sample_count):
+                t = (i / status.angle_sample_count) * duration_ms
+                angle_samples.append({"cts": t, "value": [0.0, 0.0]})
+
+        write_imu_json(
+            accel_samples, gyro_samples, FPS, session_dir / "imu_data.json",
+            angle_samples=angle_samples,
+        )
 
         # Placeholder video file
         (session_dir / "raw_video.mp4").write_bytes(b"MOCK_VIDEO")
@@ -196,6 +221,7 @@ class MockBackend(Backend):
             "duration_seconds": status.duration_seconds,
             "frame_count": status.frame_count,
             "imu_sample_count": status.imu_sample_count,
+            "angle_sample_count": status.angle_sample_count,
             "fps": FPS,
             "imu_hz": IMU_HZ,
             "backend": "mock",

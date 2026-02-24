@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import time
 from pathlib import Path
 
 from grabette.backend.base import Backend
-from grabette.models import CaptureStatus, IMUSample, SensorState
+from grabette.models import AngleSample, CaptureStatus, IMUSample, SensorState
 from grabette.output import write_imu_json
 
 logger = logging.getLogger(__name__)
@@ -49,18 +50,21 @@ class RpiBackend(Backend):
         self._imu.init_sensor()
 
         if self._enable_angle:
-            try:
-                from grabette.hardware.angle import AngleCapture
-                self._angle = AngleCapture(self._sync)
-                self._angle.init_sensors()
-                logger.info("Angle sensors initialized")
-            except Exception:
-                logger.warning("Angle sensors not available, continuing without them")
-                self._angle = None
+            self._init_angle_sensors()
 
         self._running = True
         self._start_time = time.time()
         logger.info("RpiBackend started")
+
+    def _init_angle_sensors(self) -> None:
+        try:
+            from grabette.hardware.angle import AngleCapture
+            self._angle = AngleCapture(self._sync)
+            self._angle.init_sensors()
+            logger.info("Angle sensors initialized")
+        except Exception:
+            logger.warning("Angle sensors not available, continuing without them")
+            self._angle = None
 
     async def stop(self) -> None:
         if self._capturing:
@@ -71,8 +75,10 @@ class RpiBackend(Backend):
 
     def get_state(self) -> SensorState:
         imu = None
+        angle = None
+
         if self._capturing:
-            # During capture, read latest from capture buffer (no I2C contention)
+            # During capture, read from capture buffers (no I2C contention)
             if self._imu and self._imu._samples.accel:
                 last_accel = self._imu._samples.accel[-1]
                 last_gyro = self._imu._samples.gyro[-1] if self._imu._samples.gyro else {"cts": 0, "value": [0, 0, 0]}
@@ -81,19 +87,41 @@ class RpiBackend(Backend):
                     accel=tuple(last_accel["value"]),
                     gyro=tuple(last_gyro["value"]),
                 )
-        elif self._imu and self._imu._bmi088:
-            # When idle, read directly from sensor
-            try:
-                accel = self._imu._bmi088.read_accel()
-                gyro = self._imu._bmi088.read_gyro()
-                imu = IMUSample(
-                    timestamp_ms=time.time() * 1000,
-                    accel=accel,
-                    gyro=gyro,
+            if self._angle and self._angle._samples.samples:
+                last = self._angle._samples.samples[-1]
+                angle = AngleSample(
+                    timestamp_ms=last["cts"],
+                    angle1=last["value"][0],
+                    angle2=last["value"][1],
                 )
-            except Exception:
-                pass
-        return SensorState(imu=imu, capture=self.get_capture_status())
+        else:
+            # When idle, read directly from sensors
+            if self._imu and self._imu._bmi088:
+                try:
+                    accel = self._imu._bmi088.read_accel()
+                    gyro = self._imu._bmi088.read_gyro()
+                    imu = IMUSample(
+                        timestamp_ms=time.time() * 1000,
+                        accel=accel,
+                        gyro=gyro,
+                    )
+                except Exception:
+                    pass
+            if self._angle and self._angle._i2c_1 and self._angle._i2c_2:
+                try:
+                    raw1 = self._angle._read_angle_raw(self._angle._i2c_1)
+                    raw2 = self._angle._read_angle_raw(self._angle._i2c_2)
+                    cal1 = self._angle._normalize_angle(raw1 - self._angle._offset_1_deg)
+                    cal2 = self._angle._normalize_angle(raw2 - self._angle._offset_2_deg)
+                    angle = AngleSample(
+                        timestamp_ms=time.time() * 1000,
+                        angle1=math.radians(cal1),
+                        angle2=math.radians(cal2),
+                    )
+                except Exception:
+                    pass
+
+        return SensorState(imu=imu, angle=angle, capture=self.get_capture_status())
 
     async def start_capture(self, session_dir: Path) -> None:
         if self._capturing:
@@ -122,8 +150,10 @@ class RpiBackend(Backend):
         frame_timestamps = self._camera.stop()
         imu_samples = self._imu.stop()
         angle_samples = None
+        angle_count = 0
         if self._angle:
             angle_data = self._angle.stop()
+            angle_count = len(angle_data.samples)
             angle_samples = angle_data.samples if angle_data.samples else None
 
         duration = time.time() - self._capture_start if self._capture_start else 0.0
@@ -133,6 +163,7 @@ class RpiBackend(Backend):
             duration_seconds=round(duration, 2),
             frame_count=len(frame_timestamps),
             imu_sample_count=len(imu_samples.accel),
+            angle_sample_count=angle_count,
         )
 
         # Write output files
@@ -148,6 +179,7 @@ class RpiBackend(Backend):
                 "duration_seconds": status.duration_seconds,
                 "frame_count": status.frame_count,
                 "imu_sample_count": status.imu_sample_count,
+                "angle_sample_count": status.angle_sample_count,
                 "fps": FPS,
                 "imu_hz": IMU_HZ,
                 "backend": "rpi",
@@ -163,6 +195,8 @@ class RpiBackend(Backend):
         self._imu = BMI088Capture(self._sync, sample_rate_hz=IMU_HZ)
         self._camera.init_camera()
         self._imu.init_sensor()
+        if self._enable_angle:
+            self._init_angle_sensors()
 
         self._capture_session_dir = None
         self._capture_start = None
@@ -176,6 +210,7 @@ class RpiBackend(Backend):
 
         frame_count = self._camera.frame_count if self._camera else 0
         imu_count = self._imu.sample_count[0] if self._imu else 0
+        angle_count = self._angle.sample_count if self._angle else 0
 
         return CaptureStatus(
             is_capturing=self._capturing,
@@ -183,6 +218,7 @@ class RpiBackend(Backend):
             duration_seconds=round(duration, 2),
             frame_count=frame_count,
             imu_sample_count=imu_count,
+            angle_sample_count=angle_count,
         )
 
     @property

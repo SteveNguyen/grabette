@@ -17,6 +17,7 @@ class SessionInfo(BaseModel):
     duration_seconds: float = 0.0
     frame_count: int = 0
     imu_sample_count: int = 0
+    angle_sample_count: int = 0
     has_video: bool = False
     has_imu: bool = False
 
@@ -73,12 +74,14 @@ class SessionManager:
         duration = 0.0
         frame_count = 0
         imu_sample_count = 0
+        angle_sample_count = 0
         if meta_path.exists():
             import json
             meta = json.loads(meta_path.read_text())
             duration = meta.get("duration_seconds", 0.0)
             frame_count = meta.get("frame_count", 0)
             imu_sample_count = meta.get("imu_sample_count", 0)
+            angle_sample_count = meta.get("angle_sample_count", 0)
 
         return SessionInfo(
             session_id=session_id,
@@ -86,6 +89,7 @@ class SessionManager:
             duration_seconds=duration,
             frame_count=frame_count,
             imu_sample_count=imu_sample_count,
+            angle_sample_count=angle_sample_count,
             has_video=video_path.exists(),
             has_imu=imu_path.exists(),
         )

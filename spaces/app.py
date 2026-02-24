@@ -57,10 +57,10 @@ def get_camera_frame():
 def get_sensor_state():
     c = get_client()
     if c is None:
-        return "Not connected", "Not connected", gr.update(active=True)
+        return "Not connected", "Not connected", "Not connected", gr.update(active=True)
     state = c.get_state()
     if state is None:
-        return "Disconnected", "Disconnected", gr.update(active=True)
+        return "Disconnected", "Disconnected", "Disconnected", gr.update(active=True)
     imu = state.get("imu")
     if imu:
         a = imu["accel"]
@@ -71,20 +71,36 @@ def get_sensor_state():
         )
     else:
         imu_text = "No IMU data"
+    # Angle sensors
+    angle = state.get("angle")
+    if angle:
+        import math
+        a1_deg = math.degrees(angle["angle1"])
+        a2_deg = math.degrees(angle["angle2"])
+        angle_text = (
+            f"Sensor 1: {a1_deg:+7.2f}\u00b0  ({angle['angle1']:+.4f} rad)\n"
+            f"Sensor 2: {a2_deg:+7.2f}\u00b0  ({angle['angle2']:+.4f} rad)"
+        )
+    else:
+        angle_text = "No angle data"
     cap = state.get("capture", {})
     capturing = cap.get("is_capturing", False)
     if capturing:
-        cap_text = (
-            f"\u25cf RECORDING  {cap.get('session_id', '')}\n"
-            f"Duration: {cap.get('duration_seconds', 0):.1f}s\n"
+        parts = [
+            f"\u25cf RECORDING  {cap.get('session_id', '')}",
+            f"Duration: {cap.get('duration_seconds', 0):.1f}s",
             f"Frames: {cap.get('frame_count', 0)}  |  "
-            f"IMU: {cap.get('imu_sample_count', 0)}"
-        )
+            f"IMU: {cap.get('imu_sample_count', 0)}",
+        ]
+        angle_cnt = cap.get("angle_sample_count", 0)
+        if angle_cnt:
+            parts[-1] += f"  |  Angle: {angle_cnt}"
+        cap_text = "\n".join(parts)
     else:
         cap_text = "\u25cb Idle"
     # Pause camera polling during capture to protect sync
     camera_active = not capturing
-    return imu_text, cap_text, gr.update(active=camera_active)
+    return imu_text, angle_text, cap_text, gr.update(active=camera_active)
 
 
 def on_start_capture():
@@ -122,6 +138,7 @@ def refresh_sessions():
             f"{s['duration_seconds']:.1f}s",
             s["frame_count"],
             s["imu_sample_count"],
+            s.get("angle_sample_count", 0),
         ])
         ids.append(s["session_id"])
     return rows, gr.update(choices=ids, value=ids[0] if ids else None)
@@ -262,6 +279,9 @@ with gr.Blocks(title="Grabette") as demo:
             imu_box = gr.Textbox(
                 label="IMU Live", lines=2, interactive=False,
             )
+            angle_box = gr.Textbox(
+                label="Angle Sensors", lines=2, interactive=False,
+            )
             capture_box = gr.Textbox(
                 label="Capture Status", lines=3, interactive=False,
             )
@@ -278,7 +298,7 @@ with gr.Blocks(title="Grabette") as demo:
         refresh_btn = gr.Button("Refresh", size="sm")
         session_dd = gr.Dropdown(label="Selected Session", interactive=True)
     sessions_table = gr.Dataframe(
-        headers=["Session ID", "Duration", "Frames", "IMU Samples"],
+        headers=["Session ID", "Duration", "Frames", "IMU", "Angle"],
         interactive=False,
     )
     with gr.Row():
@@ -357,7 +377,7 @@ with gr.Blocks(title="Grabette") as demo:
 
     state_timer = gr.Timer(0.5)
     state_timer.tick(
-        fn=get_sensor_state, outputs=[imu_box, capture_box, camera_timer],
+        fn=get_sensor_state, outputs=[imu_box, angle_box, capture_box, camera_timer],
     )
 
     system_timer = gr.Timer(10)
