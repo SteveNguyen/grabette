@@ -3,16 +3,8 @@
 from __future__ import annotations
 
 import io
-import json
 import logging
 import math
-import time
-from collections import deque
-
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import numpy as np
 
 import gradio as gr
 from PIL import Image
@@ -20,6 +12,100 @@ from PIL import Image
 from grabette.ui.api_client import GrabetteClient
 
 logger = logging.getLogger(__name__)
+
+# ── Client-side uPlot charts (loaded from CDN, poll /state directly) ──
+_CHARTS_HTML = """\
+<style>
+#gc-wrap .u-title{color:#ccc;font-size:12px}
+#gc-wrap .u-legend .u-label{color:#aaa}
+#gc-wrap .u-legend .u-value{color:#ccc}
+#gc-wrap .u-legend{font-size:11px}
+</style>
+<div id="gc-wrap" style="display:flex;gap:16px;width:100%;padding:8px 0;">
+  <div style="flex:1;min-width:0;">
+    <div id="gc-accel"></div>
+    <div id="gc-gyro" style="margin-top:4px;"></div>
+  </div>
+  <div style="flex:1;min-width:0;">
+    <div id="gc-angle"></div>
+  </div>
+</div>
+<script>
+(function(){
+  var MAXLEN = 30;
+  function loadUPlot(){
+    return new Promise(function(ok){
+      if(window.uPlot){ok();return;}
+      var c=document.createElement('link');
+      c.rel='stylesheet';
+      c.href='https://cdn.jsdelivr.net/npm/uplot@1.6.32/dist/uPlot.min.css';
+      document.head.appendChild(c);
+      var s=document.createElement('script');
+      s.src='https://cdn.jsdelivr.net/npm/uplot@1.6.32/dist/uPlot.iife.min.js';
+      s.onload=ok;document.head.appendChild(s);
+    });
+  }
+  function roll(a,v){a.push(v);if(a.length>MAXLEN)a.shift();}
+  var iT=[],ax=[],ay=[],az=[],gx=[],gy=[],gz=[];
+  var aT=[],pr=[],di=[],t0=null;
+
+  loadUPlot().then(function(){
+    var wrap=document.getElementById('gc-wrap');
+    var hw=Math.floor(wrap.clientWidth/2-12);
+    function opts(title,yLbl,ser,h){
+      return {width:hw,height:h||160,title:title,
+        cursor:{show:false},legend:{show:true,live:false},
+        scales:{x:{time:false}},series:[{}].concat(ser),
+        axes:[{stroke:'#888',grid:{stroke:'#333'},size:40},
+              {stroke:'#888',grid:{stroke:'#333'},label:yLbl,size:60}]};
+    }
+    var aC=new uPlot(opts('Accelerometer','m/s\\u00b2',[
+      {label:'X',stroke:'#e55',width:1},
+      {label:'Y',stroke:'#5b5',width:1},
+      {label:'Z',stroke:'#55e',width:1}]),
+      [[],[],[],[]],document.getElementById('gc-accel'));
+    var gC=new uPlot(opts('Gyroscope','rad/s',[
+      {label:'X',stroke:'#e55',width:1},
+      {label:'Y',stroke:'#5b5',width:1},
+      {label:'Z',stroke:'#55e',width:1}]),
+      [[],[],[],[]],document.getElementById('gc-gyro'));
+    var nC=new uPlot(opts('Angle Sensors','Degrees',[
+      {label:'Proximal',stroke:'#4488cc',width:1.5},
+      {label:'Distal',stroke:'#cc8844',width:1.5}],328),
+      [[],[],[]],document.getElementById('gc-angle'));
+
+    new ResizeObserver(function(){
+      var nw=Math.floor(wrap.clientWidth/2-12);
+      aC.setSize({width:nw,height:160});
+      gC.setSize({width:nw,height:160});
+      nC.setSize({width:nw,height:328});
+    }).observe(wrap);
+
+    setInterval(function(){
+      fetch('/state').then(function(r){return r.ok?r.json():null;})
+      .then(function(s){
+        if(!s)return;
+        var now=performance.now()/1000;
+        if(t0===null)t0=now;
+        var t=now-t0;
+        if(s.imu){
+          var a=s.imu.accel,g=s.imu.gyro;
+          roll(iT,t);roll(ax,a[0]);roll(ay,a[1]);roll(az,a[2]);
+          roll(gx,g[0]);roll(gy,g[1]);roll(gz,g[2]);
+          aC.setData([iT.slice(),ax.slice(),ay.slice(),az.slice()]);
+          gC.setData([iT.slice(),gx.slice(),gy.slice(),gz.slice()]);
+        }
+        if(s.angle){
+          var p=s.angle.proximal*180/Math.PI;
+          var d=s.angle.distal*180/Math.PI;
+          roll(aT,t);roll(pr,p);roll(di,d);
+          nC.setData([aT.slice(),pr.slice(),di.slice()]);
+        }
+      }).catch(function(){});
+    },500);
+  });
+})();
+</script>"""
 
 
 def create_ui(api_url: str | None = None) -> gr.Blocks:
@@ -30,55 +116,6 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
                  env var or http://localhost:8000.
     """
     client = GrabetteClient(base_url=api_url)
-
-    # ── Rolling data buffers for plots ────────────────────────────────
-    _plot_maxlen = 30  # ~15 s at 0.5 s poll
-    _imu_t: deque[float] = deque(maxlen=_plot_maxlen)
-    _imu_accel: deque[list[float]] = deque(maxlen=_plot_maxlen)
-    _imu_gyro: deque[list[float]] = deque(maxlen=_plot_maxlen)
-    _ang_t: deque[float] = deque(maxlen=_plot_maxlen)
-    _ang_vals: deque[list[float]] = deque(maxlen=_plot_maxlen)
-
-    def _make_imu_plot():
-        if not _imu_t:
-            return None
-        now = time.monotonic()
-        t = np.array([x - now for x in _imu_t])
-        accel = np.array(list(_imu_accel))
-        gyro = np.array(list(_imu_gyro))
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(5, 3.5), tight_layout=True)
-        for i, (c, label) in enumerate(zip("rgb", "XYZ")):
-            ax1.plot(t, accel[:, i], color=c, linewidth=1, label=label)
-        ax1.set_ylabel("m/s\u00b2")
-        ax1.set_title("Accelerometer", fontsize=9)
-        ax1.legend(loc="upper left", fontsize=7, ncol=3)
-        ax1.grid(True, alpha=0.3)
-        for i, (c, label) in enumerate(zip("rgb", "XYZ")):
-            ax2.plot(t, gyro[:, i], color=c, linewidth=1, label=label)
-        ax2.set_ylabel("rad/s")
-        ax2.set_xlabel("Time (s)")
-        ax2.set_title("Gyroscope", fontsize=9)
-        ax2.legend(loc="upper left", fontsize=7, ncol=3)
-        ax2.grid(True, alpha=0.3)
-        plt.close(fig)
-        return fig
-
-    def _make_angle_plot():
-        if not _ang_t:
-            return None
-        now = time.monotonic()
-        t = np.array([x - now for x in _ang_t])
-        vals = np.array(list(_ang_vals))
-        fig, ax = plt.subplots(figsize=(5, 3.5), tight_layout=True)
-        ax.plot(t, vals[:, 0], color="#4488cc", linewidth=1.5, label="Proximal")
-        ax.plot(t, vals[:, 1], color="#cc8844", linewidth=1.5, label="Distal")
-        ax.set_ylabel("Degrees")
-        ax.set_xlabel("Time (s)")
-        ax.set_title("Angle Sensors", fontsize=9)
-        ax.legend(loc="upper left", fontsize=8)
-        ax.grid(True, alpha=0.3)
-        plt.close(fig)
-        return fig
 
     # ── Callback helpers ──────────────────────────────────────────────
 
@@ -97,7 +134,7 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
         state = client.get_state()
         if state is None:
             return ("Disconnected", "Disconnected", "Disconnected",
-                    None, None, gr.update(active=True))
+                    gr.update(active=True))
 
         # IMU
         imu = state.get("imu")
@@ -108,9 +145,6 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
                 f"Accel: [{a[0]:+8.3f}, {a[1]:+8.3f}, {a[2]:+8.3f}] m/s\u00b2\n"
                 f"Gyro:  [{g[0]:+8.4f}, {g[1]:+8.4f}, {g[2]:+8.4f}] rad/s"
             )
-            _imu_t.append(time.monotonic())
-            _imu_accel.append(a)
-            _imu_gyro.append(g)
         else:
             imu_text = "No IMU data"
 
@@ -123,8 +157,6 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
                 f"Proximal: {p_deg:+7.2f}\u00b0  ({angle['proximal']:+.4f} rad)\n"
                 f"Distal:   {d_deg:+7.2f}\u00b0  ({angle['distal']:+.4f} rad)"
             )
-            _ang_t.append(time.monotonic())
-            _ang_vals.append([p_deg, d_deg])
         else:
             angle_text = "No angle data"
 
@@ -145,14 +177,10 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
         else:
             cap_text = "\u25cb Idle"
 
-        # Plots
-        imu_fig = _make_imu_plot()
-        angle_fig = _make_angle_plot()
-
         # Pause camera polling during capture to protect sync
         camera_active = not capturing
         return (imu_text, angle_text, cap_text,
-                imu_fig, angle_fig, gr.update(active=camera_active))
+                gr.update(active=camera_active))
 
     def on_start_capture():
         result = client.start_capture()
@@ -308,10 +336,8 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
                     show_label=False, interactive=False, max_lines=1,
                 )
 
-        # ── Sensor plots ──────────────────────────────────────────────
-        with gr.Row(equal_height=True):
-            imu_plot_out = gr.Plot(label="IMU")
-            angle_plot_out = gr.Plot(label="Angle Sensors")
+        # ── Sensor charts (client-side uPlot, polls /state via JS) ─────
+        charts_html = gr.HTML(value=_CHARTS_HTML)
 
         # ── Sessions ──────────────────────────────────────────────────
         gr.Markdown("### Sessions")
@@ -403,8 +429,7 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
         state_timer = gr.Timer(0.5)
         state_timer.tick(
             fn=get_sensor_state,
-            outputs=[imu_box, angle_box, capture_box,
-                     imu_plot_out, angle_plot_out, camera_timer],
+            outputs=[imu_box, angle_box, capture_box, camera_timer],
         )
 
         system_timer = gr.Timer(10)
