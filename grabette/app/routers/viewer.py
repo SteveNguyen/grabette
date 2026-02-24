@@ -46,10 +46,9 @@ VIEWER_HTML = """\
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
-import URDFLoader from 'https://cdn.jsdelivr.net/npm/urdf-loader@0.12.6/src/URDFLoader.js';
 
 const container = document.getElementById('container');
-const statusEl = document.getElementById('status');
+const statusEl  = document.getElementById('status');
 const loadingEl = document.getElementById('loading');
 
 // ── Scene ───────────────────────────────────────────────────────────
@@ -82,114 +81,214 @@ dirLight.castShadow = true;
 dirLight.shadow.mapSize.set(1024, 1024);
 scene.add(dirLight);
 
-const fillLight = new THREE.DirectionalLight(0x8899bb, 0.3);
-fillLight.position.set(-0.4, -0.2, 0.3);
-scene.add(fillLight);
+scene.add(new THREE.DirectionalLight(0x8899bb, 0.3).translateX(-0.4));
 
 // ── Grid ────────────────────────────────────────────────────────────
-const grid = new THREE.GridHelper(0.4, 16, 0x334466, 0x222244);
-scene.add(grid);
+scene.add(new THREE.GridHelper(0.4, 16, 0x334466, 0x222244));
 
-// ── URDF ────────────────────────────────────────────────────────────
+// ── Inline URDF parser (avoids urdf-loader CDN dep) ─────────────────
+
+const PACKAGES  = { grabette_right: '/urdf/grabette_right/' };
 const LINK_COLORS = {
-  thumb_base:        0x7a8a9a,
-  phalanx_1_bottom:  0x4488cc,
-  phalanx_2:         0xcc8844,
+  thumb_base:       0x7a8a9a,
+  phalanx_1_bottom: 0x4488cc,
+  phalanx_2:        0xcc8844,
 };
 
-const stlLoader = new STLLoader();
-let robot = null;
+function parseVec(s) {
+  return (s || '0 0 0').trim().split(/\\s+/).map(Number);
+}
 
-const urdfLoader = new URDFLoader();
-urdfLoader.packages = { grabette_right: '/urdf/grabette_right/' };
+function resolvePackageURL(filename) {
+  if (!filename.startsWith('package://')) return filename;
+  const rest = filename.slice(10);           // strip package://
+  const i    = rest.indexOf('/');
+  const pkg  = rest.slice(0, i);
+  return (PACKAGES[pkg] || '') + rest.slice(i + 1);
+}
 
-urdfLoader.loadMeshCb = (path, manager, onComplete) => {
-  stlLoader.load(
-    path,
-    geometry => {
-      geometry.computeVertexNormals();
-      const mat = new THREE.MeshPhongMaterial({
-        color: 0x888888, specular: 0x333333, shininess: 80,
+async function parseURDF(url) {
+  const resp = await fetch(url);
+  const xml  = await resp.text();
+  const doc  = new DOMParser().parseFromString(xml, 'text/xml');
+
+  const links = {};
+  for (const el of doc.querySelectorAll('link')) {
+    const visuals = [];
+    for (const vis of el.querySelectorAll('visual')) {
+      const meshEl = vis.querySelector('geometry > mesh');
+      if (!meshEl) continue;
+      const orig = vis.querySelector('origin');
+      visuals.push({
+        xyz: parseVec(orig?.getAttribute('xyz')),
+        rpy: parseVec(orig?.getAttribute('rpy')),
+        file: resolvePackageURL(meshEl.getAttribute('filename')),
       });
-      const mesh = new THREE.Mesh(geometry, mat);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      onComplete(mesh);
-    },
-    undefined,
-    err => {
-      console.warn('Mesh load error:', path, err);
-      onComplete(new THREE.Object3D());
-    },
-  );
-};
-
-urdfLoader.load('/urdf/grabette_right/robot.urdf', r => {
-  robot = r;
-  scene.add(robot);
-
-  // Colour each link
-  for (const [name, link] of Object.entries(robot.links)) {
-    const col = LINK_COLORS[name] || 0x888888;
-    link.traverse(child => {
-      if (child.isMesh) {
-        child.material = new THREE.MeshPhongMaterial({
-          color: col, specular: 0x444444, shininess: 80,
-        });
-      }
-    });
+    }
+    links[el.getAttribute('name')] = visuals;
   }
 
-  // Fit camera to model
-  const box = new THREE.Box3().setFromObject(robot);
-  const center = box.getCenter(new THREE.Vector3());
-  controls.target.copy(center);
-  controls.update();
+  const joints = {};
+  for (const el of doc.querySelectorAll('joint')) {
+    const orig = el.querySelector('origin');
+    const axEl = el.querySelector('axis');
+    joints[el.getAttribute('name')] = {
+      type:   el.getAttribute('type'),
+      parent: el.querySelector('parent').getAttribute('link'),
+      child:  el.querySelector('child').getAttribute('link'),
+      xyz:    parseVec(orig?.getAttribute('xyz')),
+      rpy:    parseVec(orig?.getAttribute('rpy')),
+      axis:   parseVec(axEl?.getAttribute('xyz') || '0 0 1'),
+    };
+  }
+  return { links, joints };
+}
 
-  loadingEl.style.display = 'none';
-});
+// ── Build three.js scene from parsed URDF ───────────────────────────
+
+function loadSTL(loader, url) {
+  return new Promise((resolve, reject) =>
+    loader.load(url, resolve, undefined, reject));
+}
+
+async function buildRobot(urdf) {
+  const stlLoader  = new STLLoader();
+  const linkGroups = {};
+  let loaded = 0, total = 0;
+
+  // Count total meshes for progress
+  for (const visuals of Object.values(urdf.links)) total += visuals.length;
+
+  // Create a group per link and load its meshes in parallel
+  const allLoads = [];
+  for (const [name, visuals] of Object.entries(urdf.links)) {
+    const group = new THREE.Group();
+    group.name = name;
+    linkGroups[name] = group;
+    const color = LINK_COLORS[name] || 0x888888;
+
+    for (const vis of visuals) {
+      const p = loadSTL(stlLoader, vis.file).then(geo => {
+        geo.computeVertexNormals();
+        const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({
+          color, specular: 0x444444, shininess: 80,
+        }));
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.position.set(...vis.xyz);
+        mesh.rotation.set(vis.rpy[0], vis.rpy[1], vis.rpy[2], 'ZYX');
+        group.add(mesh);
+        loaded++;
+        loadingEl.textContent = 'Loading model... ' + loaded + '/' + total;
+      }).catch(err => {
+        console.warn('STL load error:', vis.file, err);
+        loaded++;
+      });
+      allLoads.push(p);
+    }
+  }
+  await Promise.all(allLoads);
+
+  // Wire joints (parent → transform → pivot → child)
+  const pivots   = {};
+  const children = new Set();
+
+  for (const [name, j] of Object.entries(urdf.joints)) {
+    const pGroup = linkGroups[j.parent];
+    const cGroup = linkGroups[j.child];
+    if (!pGroup || !cGroup) continue;
+
+    const transform = new THREE.Group();
+    transform.position.set(...j.xyz);
+    transform.rotation.set(j.rpy[0], j.rpy[1], j.rpy[2], 'ZYX');
+
+    const pivot = new THREE.Group();
+    pivot.userData.axis = new THREE.Vector3(...j.axis).normalize();
+    transform.add(pivot);
+    pivot.add(cGroup);
+    pGroup.add(transform);
+
+    pivots[name] = pivot;
+    children.add(j.child);
+  }
+
+  // Root = link that is not a child of any joint
+  const rootName = Object.keys(urdf.links).find(n => !children.has(n));
+  return { root: linkGroups[rootName], pivots };
+}
+
+// ── Main ────────────────────────────────────────────────────────────
+
+let jointPivots = {};
+
+(async () => {
+  try {
+    const urdf  = await parseURDF('/urdf/grabette_right/robot.urdf');
+    const robot = await buildRobot(urdf);
+    scene.add(robot.root);
+    jointPivots = robot.pivots;
+
+    // Fit camera to model
+    const box    = new THREE.Box3().setFromObject(robot.root);
+    const center = box.getCenter(new THREE.Vector3());
+    controls.target.copy(center);
+    controls.update();
+
+    loadingEl.style.display = 'none';
+    startPolling();
+  } catch (err) {
+    loadingEl.textContent = 'Error: ' + err.message;
+    console.error(err);
+  }
+})();
+
+function setJoint(name, angle) {
+  const pivot = jointPivots[name];
+  if (!pivot) return;
+  pivot.quaternion.setFromAxisAngle(pivot.userData.axis, angle);
+}
 
 // ── Joint angle updates ─────────────────────────────────────────────
+
 // Accept updates via postMessage from parent (Gradio iframe)
+let gotPostMessage = false;
 window.addEventListener('message', e => {
-  if (!robot || !e.data) return;
+  if (!e.data || typeof e.data !== 'object') return;
   const { proximal, distal } = e.data;
-  if (proximal !== undefined) robot.setJointValue('proximal', proximal);
-  if (distal !== undefined)   robot.setJointValue('distal', distal);
+  if (proximal !== undefined) setJoint('proximal', proximal);
+  if (distal   !== undefined) setJoint('distal',   distal);
   updateStatus(proximal, distal);
+  gotPostMessage = true;
 });
 
-// Also self-poll /api/state as fallback (when opened standalone)
-let usePostMessage = false;
-window.addEventListener('message', () => { usePostMessage = true; }, { once: true });
-
-async function pollState() {
-  if (usePostMessage || !robot) return;
-  try {
-    const resp = await fetch('/api/state');
-    const state = await resp.json();
-    if (state.angle) {
-      robot.setJointValue('proximal', state.angle.angle1);
-      robot.setJointValue('distal', state.angle.angle2);
-      updateStatus(state.angle.angle1, state.angle.angle2);
-    }
-  } catch (_) {}
+// Self-poll /api/state when not receiving postMessage
+function startPolling() {
+  setInterval(async () => {
+    if (gotPostMessage) return;
+    try {
+      const resp  = await fetch('/api/state');
+      const state = await resp.json();
+      if (state.angle) {
+        setJoint('proximal', state.angle.angle1);
+        setJoint('distal',   state.angle.angle2);
+        updateStatus(state.angle.angle1, state.angle.angle2);
+      }
+    } catch (_) {}
+  }, 500);
 }
-setInterval(pollState, 500);
 
 function updateStatus(p, d) {
   if (p === undefined || d === undefined) return;
   const deg = v => (v * 180 / Math.PI).toFixed(1);
-  statusEl.textContent = `proximal ${deg(p)}°  distal ${deg(d)}°`;
+  statusEl.textContent = 'proximal ' + deg(p) + '\\u00b0  distal ' + deg(d) + '\\u00b0';
 }
 
 // ── Render loop ─────────────────────────────────────────────────────
-function animate() {
+(function animate() {
   requestAnimationFrame(animate);
   controls.update();
   renderer.render(scene, camera);
-}
-animate();
+})();
 
 // ── Resize ──────────────────────────────────────────────────────────
 window.addEventListener('resize', () => {
