@@ -227,7 +227,7 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
                 gr.HTML(
                     value=(
                         '<iframe src="/charts/imu" '
-                        'style="width:100%;height:340px;border:none;'
+                        'style="width:100%;height:420px;border:none;'
                         'border-radius:8px;background:transparent;"></iframe>'
                     ),
                 )
@@ -239,7 +239,7 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
                 gr.HTML(
                     value=(
                         '<iframe src="/charts/angle" '
-                        'style="width:100%;height:180px;border:none;'
+                        'style="width:100%;height:220px;border:none;'
                         'border-radius:8px;background:transparent;"></iframe>'
                     ),
                 )

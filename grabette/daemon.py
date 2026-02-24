@@ -12,29 +12,32 @@ logger = logging.getLogger(__name__)
 
 
 class SampleRing:
-    """Thread-safe ring buffer for IMU and angle samples."""
+    """Thread-safe ring buffer with cursor-based reads (multi-consumer safe)."""
 
     def __init__(self, maxlen: int = 500) -> None:
-        self._imu: deque[dict] = deque(maxlen=maxlen)
-        self._angle: deque[dict] = deque(maxlen=maxlen)
+        self._imu: deque[tuple[int, dict]] = deque(maxlen=maxlen)
+        self._angle: deque[tuple[int, dict]] = deque(maxlen=maxlen)
+        self._seq = 0
         self._lock = threading.Lock()
 
     def push_state(self, state) -> None:
         with self._lock:
+            self._seq += 1
+            seq = self._seq
             if state.imu is not None:
                 s = state.imu
-                self._imu.append({"t": s.timestamp_ms, "a": list(s.accel), "g": list(s.gyro)})
+                self._imu.append((seq, {"t": s.timestamp_ms, "a": list(s.accel), "g": list(s.gyro)}))
             if state.angle is not None:
                 s = state.angle
-                self._angle.append({"t": s.timestamp_ms, "p": s.proximal, "d": s.distal})
+                self._angle.append((seq, {"t": s.timestamp_ms, "p": s.proximal, "d": s.distal}))
 
-    def drain(self) -> dict:
+    def get_since(self, cursor: int = 0) -> dict:
+        """Return samples with seq > cursor. Multiple consumers can read independently."""
         with self._lock:
-            imu = list(self._imu)
-            angle = list(self._angle)
-            self._imu.clear()
-            self._angle.clear()
-        return {"imu": imu, "angle": angle}
+            imu = [s for seq, s in self._imu if seq > cursor]
+            angle = [s for seq, s in self._angle if seq > cursor]
+            seq = self._seq
+        return {"imu": imu, "angle": angle, "cursor": seq}
 
 
 class DaemonState(str, Enum):

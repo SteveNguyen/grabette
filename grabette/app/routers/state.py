@@ -17,8 +17,8 @@ def get_state(backend: Backend = Depends(get_backend)):
 
 
 @router.get("/history")
-def get_state_history(daemon: Daemon = Depends(get_daemon)):
-    return daemon.sample_ring.drain()
+def get_state_history(cursor: int = 0, daemon: Daemon = Depends(get_daemon)):
+    return daemon.sample_ring.get_since(cursor)
 
 
 @router.websocket("/ws")
