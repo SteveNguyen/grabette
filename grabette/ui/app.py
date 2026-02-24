@@ -1,4 +1,4 @@
-"""Gradio dashboard for Grabette — camera view, capture controls, session management."""
+"""Gradio dashboard for Grabette — camera view, capture controls, session/episode management."""
 
 from __future__ import annotations
 
@@ -14,19 +14,11 @@ from grabette.ui.api_client import GrabetteClient
 logger = logging.getLogger(__name__)
 
 def create_ui(api_url: str | None = None) -> gr.Blocks:
-    """Build and return the Gradio Blocks app.
-
-    Args:
-        api_url: Base URL of the grabette API. Defaults to GRABETTE_API_URL
-                 env var or http://localhost:8000.
-    """
     client = GrabetteClient(base_url=api_url)
 
     # ── Callback helpers ──────────────────────────────────────────────
 
     def get_camera_frame():
-        """Fetch camera frame. Returns None during capture (backend skips
-        JPEG encoding to protect frame timing and IMU sync)."""
         data = client.get_snapshot()
         if data is None:
             return None
@@ -82,7 +74,6 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
         else:
             cap_text = "\u25cb Idle"
 
-        # Pause camera polling during capture to protect sync
         camera_active = not capturing
         return (imu_text, angle_text, cap_text,
                 gr.update(active=camera_active))
@@ -91,7 +82,7 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
         result = client.start_capture()
         if "error" in result:
             return f"Error: {result['error']}"
-        return f"Started: {result.get('session_id', '?')}"
+        return f"Started: {result.get('episode_id', '?')}"
 
     def on_stop_capture():
         result = client.stop_capture()
@@ -101,35 +92,132 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
         frames = result.get("frame_count", 0)
         return f"Stopped \u2014 {dur:.1f}s, {frames} frames"
 
+    # ── Session helpers ───────────────────────────────────────────────
+
+    def _get_sessions():
+        return client.list_sessions()
+
+    def _session_choices(sessions):
+        """Return list of (label, id) tuples for dropdown."""
+        return [(s["name"], s["id"]) for s in sessions]
+
+    def _target_session_choices(sessions):
+        """Session choices for the move-to dropdown."""
+        return [(s["name"], s["id"]) for s in sessions]
+
     def refresh_sessions():
-        sessions = client.list_sessions()
+        """Refresh session dropdown + episode table for current selection."""
+        sessions = _get_sessions()
+        choices = _session_choices(sessions)
+        value = choices[0][1] if choices else None
+        return (
+            gr.update(choices=choices, value=value),
+            *_refresh_episode_table(value, sessions),
+        )
+
+    def _refresh_episode_table(session_id, sessions=None):
+        """Return (episode_rows, episode_dropdown, move_target_dropdown, msg)."""
+        if sessions is None:
+            sessions = _get_sessions()
+
         rows = []
-        ids = []
+        ep_ids = []
         for s in sessions:
-            rows.append([
-                s["session_id"],
-                f"{s['duration_seconds']:.1f}s",
-                s["frame_count"],
-                s["imu_sample_count"],
-                s.get("angle_sample_count", 0),
-            ])
-            ids.append(s["session_id"])
-        dropdown_update = gr.update(choices=ids, value=ids[0] if ids else None)
-        return rows, dropdown_update
+            if s["id"] == session_id:
+                for ep in s.get("episodes", []):
+                    rows.append([
+                        ep["episode_id"],
+                        f"{ep['duration_seconds']:.1f}s",
+                        ep["frame_count"],
+                        ep["imu_sample_count"],
+                        ep.get("angle_sample_count", 0),
+                    ])
+                    ep_ids.append(ep["episode_id"])
+                break
 
-    def on_download(session_id: str | None):
-        if not session_id:
-            return None
-        return client.download_session(session_id)
+        ep_dd = gr.update(choices=ep_ids, value=ep_ids[0] if ep_ids else None)
+        move_choices = _target_session_choices(sessions)
+        move_dd = gr.update(choices=move_choices, value=move_choices[0][1] if move_choices else None)
+        return rows, ep_dd, move_dd, ""
 
-    def on_delete(session_id: str | None):
-        if not session_id:
-            return "No session selected", [], gr.update(choices=[], value=None)
-        result = client.delete_session(session_id)
-        rows, dropdown = refresh_sessions()
+    def on_session_change(session_id):
+        rows, ep_dd, move_dd, msg = _refresh_episode_table(session_id)
+        return rows, ep_dd, move_dd
+
+    def on_create_session(name, description):
+        if not name:
+            return "Enter a session name", gr.update(), gr.update(), gr.update(), gr.update()
+        result = client.create_session(name, description or "")
         if "error" in result:
-            return f"Error: {result['error']}", rows, dropdown
-        return f"Deleted {session_id}", rows, dropdown
+            return f"Error: {result['error']}", gr.update(), gr.update(), gr.update(), gr.update()
+        sessions = _get_sessions()
+        choices = _session_choices(sessions)
+        new_id = result["id"]
+        rows, ep_dd, move_dd, _ = _refresh_episode_table(new_id, sessions)
+        return (
+            f"Created: {result['name']}",
+            gr.update(choices=choices, value=new_id),
+            rows,
+            ep_dd,
+            move_dd,
+        )
+
+    def on_rename_session(session_id, new_name):
+        if not session_id:
+            return "No session selected"
+        if not new_name:
+            return "Enter a new name"
+        result = client.update_session(session_id, name=new_name)
+        if "error" in result:
+            return f"Error: {result['error']}"
+        return f"Renamed to: {result.get('name', new_name)}"
+
+    def on_delete_session(session_id):
+        if not session_id:
+            return "No session selected", gr.update(), gr.update(), gr.update(), gr.update()
+        result = client.delete_session(session_id)
+        if "error" in result:
+            return f"Error: {result['error']}", gr.update(), gr.update(), gr.update(), gr.update()
+        sessions = _get_sessions()
+        choices = _session_choices(sessions)
+        value = choices[0][1] if choices else None
+        rows, ep_dd, move_dd, _ = _refresh_episode_table(value, sessions)
+        return (
+            f"Deleted session {session_id}",
+            gr.update(choices=choices, value=value),
+            rows,
+            ep_dd,
+            move_dd,
+        )
+
+    # ── Episode helpers ───────────────────────────────────────────────
+
+    def on_download_episode(episode_id):
+        if not episode_id:
+            return None
+        return client.download_episode(episode_id)
+
+    def on_delete_episode(episode_id, session_id):
+        if not episode_id:
+            return "No episode selected", gr.update(), gr.update(), gr.update()
+        result = client.delete_episode(episode_id)
+        if "error" in result:
+            return f"Error: {result['error']}", gr.update(), gr.update(), gr.update()
+        rows, ep_dd, move_dd, _ = _refresh_episode_table(session_id)
+        return f"Deleted {episode_id}", rows, ep_dd, move_dd
+
+    def on_move_episodes(episode_id, target_session_id, current_session_id):
+        if not episode_id:
+            return "No episode selected", gr.update(), gr.update(), gr.update()
+        if not target_session_id:
+            return "No target session", gr.update(), gr.update(), gr.update()
+        result = client.move_episodes([episode_id], target_session_id)
+        if "error" in result:
+            return f"Error: {result['error']}", gr.update(), gr.update(), gr.update()
+        rows, ep_dd, move_dd, _ = _refresh_episode_table(current_session_id)
+        return f"Moved {episode_id}", rows, ep_dd, move_dd
+
+    # ── System ────────────────────────────────────────────────────────
 
     def get_system_bar():
         info = client.get_system_info()
@@ -144,7 +232,8 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
             parts.append(info["ip"])
         return " | ".join(parts)
 
-    # HuggingFace
+    # ── HuggingFace ───────────────────────────────────────────────────
+
     def on_hf_auth(token: str):
         if not token:
             return "No token provided"
@@ -161,23 +250,24 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
             return f"Authenticated as {user.get('username', '?')}"
         return "Not authenticated"
 
-    def on_hf_upload(session_id: str | None, repo_id: str):
-        if not session_id:
-            return "Select a session first"
+    def on_hf_upload(episode_id: str | None, repo_id: str):
+        if not episode_id:
+            return "Select an episode first"
         if not repo_id:
             return "Enter a repo ID (e.g. username/grabette-data)"
-        result = client.hf_upload_session(session_id, repo_id)
+        result = client.hf_upload_episode(episode_id, repo_id)
         if "error" in result:
             return f"Error: {result['error']}"
         return f"Upload started (job: {result.get('job_id', '?')})"
 
-    # SLAM
-    def on_slam_run(session_id: str | None, repo_id: str):
-        if not session_id:
-            return "Select a session first"
+    # ── SLAM ──────────────────────────────────────────────────────────
+
+    def on_slam_run(episode_id: str | None, repo_id: str):
+        if not episode_id:
+            return "Select an episode first"
         if not repo_id:
             return "Enter a HuggingFace repo ID first"
-        result = client.slam_run(session_id, repo_id)
+        result = client.slam_run(episode_id, repo_id)
         if "error" in result:
             return f"Error: {result['error']}"
         return f"SLAM started (job: {result.get('job_id', '?')})"
@@ -197,46 +287,46 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
             return f"Running ({latest.get('progress', 0):.0f}%): {latest.get('message', '')}"
         return f"Pending: {latest.get('message', '')}"
 
-    # Replay
-    def _video_iframe(session_id: str) -> str:
+    # ── Replay ────────────────────────────────────────────────────────
+
+    def _video_iframe(episode_id: str) -> str:
         return (
-            f'<iframe src="/api/replay/video?session_id={session_id}" '
+            f'<iframe src="/api/replay/video?episode_id={episode_id}" '
             'style="width:100%;height:350px;border:none;'
             'border-radius:8px;background:#000;"></iframe>'
         )
 
-    def on_replay_start(session_id: str | None):
-        if not session_id:
-            return ("No session selected", gr.update(visible=False),
+    def on_replay_start(episode_id: str | None):
+        if not episode_id:
+            return ("No episode selected", gr.update(visible=False),
                     gr.update(), gr.update(),
                     gr.update(), gr.update())
-        result = client.replay_start(session_id)
+        result = client.replay_start(episode_id)
         if "error" in result:
             return (f"Error: {result['error']}", gr.update(visible=False),
                     gr.update(), gr.update(),
                     gr.update(), gr.update())
         dur = result.get("duration_ms", 0)
         return (
-            f"Replaying {session_id}",
-            gr.update(visible=True),       # replay_panel
-            gr.update(maximum=dur, value=0),  # replay_slider
-            gr.update(active=True),         # replay_timer
-            gr.update(visible=False),       # camera_img
-            gr.update(visible=True, value=_video_iframe(session_id)),  # replay_video
+            f"Replaying {episode_id}",
+            gr.update(visible=True),
+            gr.update(maximum=dur, value=0),
+            gr.update(active=True),
+            gr.update(visible=False),
+            gr.update(visible=True, value=_video_iframe(episode_id)),
         )
 
     def on_replay_stop():
         client.replay_stop()
         return (
             "Replay stopped",
-            gr.update(visible=False),   # replay_panel
-            gr.update(active=False),    # replay_timer
-            gr.update(visible=True),    # camera_img
-            gr.update(visible=False, value=""),  # replay_video
+            gr.update(visible=False),
+            gr.update(active=False),
+            gr.update(visible=True),
+            gr.update(visible=False, value=""),
         )
 
     def on_replay_pause_play():
-        """Toggle pause/play by checking current status from the API."""
         st = client.replay_status()
         if st.get("playing"):
             client.replay_pause()
@@ -266,10 +356,10 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
             gr.update(value=t),
             label,
             btn_label,
-            gr.update(),  # keep timer active
-            gr.update(),  # keep panel visible
-            gr.update(),  # camera_img unchanged
-            gr.update(),  # replay_video unchanged
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
         )
 
     # ── Build layout ──────────────────────────────────────────────────
@@ -331,27 +421,56 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
                     show_label=False, interactive=False, max_lines=1,
                 )
 
-        # ── Sessions ──────────────────────────────────────────────────
+        # ── Sessions + Episodes ───────────────────────────────────────
         gr.Markdown("### Sessions")
         with gr.Row():
-            refresh_btn = gr.Button("Refresh", size="sm")
             session_dd = gr.Dropdown(
-                label="Selected Session", interactive=True,
+                label="Session", interactive=True,
             )
-        sessions_table = gr.Dataframe(
-            headers=["Session ID", "Duration", "Frames", "IMU", "Angle"],
+            refresh_btn = gr.Button("Refresh", size="sm")
+        with gr.Row():
+            new_session_name = gr.Textbox(
+                label="New session name", scale=2,
+                placeholder="e.g. Kitchen Pick & Place",
+            )
+            new_session_desc = gr.Textbox(
+                label="Description", scale=2,
+                placeholder="Optional description",
+            )
+            create_session_btn = gr.Button("Create Session", size="sm", scale=1)
+        with gr.Row():
+            rename_input = gr.Textbox(
+                label="Rename to", scale=2,
+                placeholder="New name",
+            )
+            rename_btn = gr.Button("Rename", size="sm", scale=1)
+            delete_session_btn = gr.Button("Delete Session", variant="stop", size="sm", scale=1)
+        session_msg = gr.Textbox(show_label=False, interactive=False, max_lines=1)
+
+        gr.Markdown("### Episodes")
+        episodes_table = gr.Dataframe(
+            headers=["Episode ID", "Duration", "Frames", "IMU", "Angle"],
             interactive=False,
         )
         with gr.Row():
+            episode_dd = gr.Dropdown(
+                label="Selected Episode", interactive=True,
+            )
+        with gr.Row():
             dl_btn = gr.Button("Download .tar.gz", size="sm")
-            del_btn = gr.Button("Delete", variant="stop", size="sm")
+            del_episode_btn = gr.Button("Delete Episode", variant="stop", size="sm")
             replay_btn = gr.Button("Replay", size="sm")
+        with gr.Row():
+            move_target_dd = gr.Dropdown(
+                label="Move to session", interactive=True,
+            )
+            move_btn = gr.Button("Move", size="sm")
         dl_file = gr.File(label="Download")
-        del_msg = gr.Textbox(show_label=False, interactive=False, max_lines=1)
+        episode_msg = gr.Textbox(show_label=False, interactive=False, max_lines=1)
 
         # ── Replay panel (hidden until replay starts) ────────────────
         with gr.Group(visible=False) as replay_panel:
-            gr.Markdown("#### Session Replay")
+            gr.Markdown("#### Episode Replay")
             replay_slider = gr.Slider(
                 minimum=0, maximum=1, step=1, value=0,
                 label="Timeline (ms)", interactive=True,
@@ -380,7 +499,7 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
                 placeholder="username/grabette-data",
                 scale=2,
             )
-            hf_upload_btn = gr.Button("Upload Session", size="sm", scale=1)
+            hf_upload_btn = gr.Button("Upload Episode", size="sm", scale=1)
         hf_upload_msg = gr.Textbox(
             label="Upload Status", interactive=False, max_lines=1,
         )
@@ -403,28 +522,59 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
         # Capture
         start_btn.click(fn=on_start_capture, outputs=capture_msg)
         stop_btn.click(fn=on_stop_capture, outputs=capture_msg).then(
-            fn=refresh_sessions, outputs=[sessions_table, session_dd],
+            fn=refresh_sessions,
+            outputs=[session_dd, episodes_table, episode_dd, move_target_dd],
         )
 
-        # Sessions
-        refresh_btn.click(
-            fn=refresh_sessions, outputs=[sessions_table, session_dd],
+        # Session selection
+        session_dd.change(
+            fn=on_session_change, inputs=session_dd,
+            outputs=[episodes_table, episode_dd, move_target_dd],
         )
-        dl_btn.click(fn=on_download, inputs=session_dd, outputs=dl_file)
-        del_btn.click(
-            fn=on_delete, inputs=session_dd,
-            outputs=[del_msg, sessions_table, session_dd],
+        refresh_btn.click(
+            fn=refresh_sessions,
+            outputs=[session_dd, episodes_table, episode_dd, move_target_dd],
+        )
+
+        # Session CRUD
+        create_session_btn.click(
+            fn=on_create_session,
+            inputs=[new_session_name, new_session_desc],
+            outputs=[session_msg, session_dd, episodes_table, episode_dd, move_target_dd],
+        )
+        rename_btn.click(
+            fn=on_rename_session,
+            inputs=[session_dd, rename_input],
+            outputs=session_msg,
+        ).then(
+            fn=refresh_sessions,
+            outputs=[session_dd, episodes_table, episode_dd, move_target_dd],
+        )
+        delete_session_btn.click(
+            fn=on_delete_session, inputs=session_dd,
+            outputs=[session_msg, session_dd, episodes_table, episode_dd, move_target_dd],
+        )
+
+        # Episode actions
+        dl_btn.click(fn=on_download_episode, inputs=episode_dd, outputs=dl_file)
+        del_episode_btn.click(
+            fn=on_delete_episode, inputs=[episode_dd, session_dd],
+            outputs=[episode_msg, episodes_table, episode_dd, move_target_dd],
+        )
+        move_btn.click(
+            fn=on_move_episodes, inputs=[episode_dd, move_target_dd, session_dd],
+            outputs=[episode_msg, episodes_table, episode_dd, move_target_dd],
         )
 
         # Replay
         replay_btn.click(
-            fn=on_replay_start, inputs=session_dd,
-            outputs=[del_msg, replay_panel, replay_slider, replay_timer,
+            fn=on_replay_start, inputs=episode_dd,
+            outputs=[episode_msg, replay_panel, replay_slider, replay_timer,
                      camera_img, replay_video],
         )
         replay_stop_btn.click(
             fn=on_replay_stop,
-            outputs=[del_msg, replay_panel, replay_timer,
+            outputs=[episode_msg, replay_panel, replay_timer,
                      camera_img, replay_video],
         )
         replay_pause_btn.click(
@@ -441,19 +591,17 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
         # HuggingFace
         hf_auth_btn.click(fn=on_hf_auth, inputs=hf_token, outputs=hf_status)
         hf_upload_btn.click(
-            fn=on_hf_upload, inputs=[session_dd, hf_repo],
+            fn=on_hf_upload, inputs=[episode_dd, hf_repo],
             outputs=hf_upload_msg,
         )
 
         # SLAM
         slam_btn.click(
-            fn=on_slam_run, inputs=[session_dd, hf_repo],
+            fn=on_slam_run, inputs=[episode_dd, hf_repo],
             outputs=slam_status,
         )
 
         # ── Periodic updates (Gradio 6 Timer) ─────────────────────────
-        # Camera timer is paused by state_timer during capture to protect
-        # frame timing and IMU synchronization.
         camera_timer = gr.Timer(0.2)
         camera_timer.tick(fn=get_camera_frame, outputs=camera_img)
 
@@ -467,7 +615,10 @@ def create_ui(api_url: str | None = None) -> gr.Blocks:
         system_timer.tick(fn=get_system_bar, outputs=system_bar)
 
         # One-shot loads on page open
-        demo.load(fn=refresh_sessions, outputs=[sessions_table, session_dd])
+        demo.load(
+            fn=refresh_sessions,
+            outputs=[session_dd, episodes_table, episode_dd, move_target_dd],
+        )
         demo.load(fn=check_hf_auth, outputs=hf_status)
 
     return demo

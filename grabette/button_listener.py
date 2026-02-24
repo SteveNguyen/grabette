@@ -121,16 +121,16 @@ class ButtonListener:
             logger.warning("Button start ignored — already capturing")
             return
 
-        session_id = self._session_manager.create_session()
-        session_dir = self._session_manager._session_dir(session_id)
+        episode_id = self._session_manager.create_episode()
+        episode_dir = self._session_manager.episode_dir(episode_id)
 
         future = asyncio.run_coroutine_threadsafe(
-            self._backend.start_capture(session_dir), self._loop,
+            self._backend.start_capture(episode_dir), self._loop,
         )
         try:
             future.result(timeout=10.0)
             self._button.led_on()
-            logger.info("Button capture started: %s", session_id)
+            logger.info("Button capture started: %s", episode_id)
         except Exception:
             logger.exception("Button start_capture failed")
             self._button.led_off()

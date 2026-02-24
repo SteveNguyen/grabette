@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     backend: str = "auto"  # "auto", "mock", or "rpi"
 
     # Data
-    data_dir: Path = Path.home() / "grabette-data" / "sessions"
+    data_dir: Path = Path.home() / "grabette-data"
 
     # Camera
     camera_fps: int = 46

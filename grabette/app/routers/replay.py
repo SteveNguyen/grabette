@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api/replay", tags=["replay"])
 
 
 class ReplayStartRequest(BaseModel):
-    session_id: str
+    episode_id: str
 
 
 class ReplaySeekRequest(BaseModel):
@@ -23,13 +23,13 @@ class ReplaySeekRequest(BaseModel):
 
 @router.post("/start")
 async def start_replay(body: ReplayStartRequest, daemon: Daemon = Depends(get_daemon)):
-    session_dir = settings.data_dir / body.session_id
-    if not session_dir.exists():
-        raise HTTPException(status_code=404, detail="Session not found")
-    if not (session_dir / "imu_data.json").exists():
-        raise HTTPException(status_code=400, detail="Session has no IMU data")
+    episode_dir = settings.data_dir / "episodes" / body.episode_id
+    if not episode_dir.exists():
+        raise HTTPException(status_code=404, detail="Episode not found")
+    if not (episode_dir / "imu_data.json").exists():
+        raise HTTPException(status_code=400, detail="Episode has no IMU data")
     try:
-        await daemon.start_replay(str(session_dir), body.session_id)
+        await daemon.start_replay(str(episode_dir), body.episode_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     return daemon.replay_status
@@ -81,11 +81,11 @@ video{max-width:100%;max-height:100%;object-fit:contain}
 <script>
 (function(){
   var params=new URLSearchParams(location.search);
-  var sid=params.get('session_id');
+  var eid=params.get('episode_id');
   var v=document.getElementById('v');
   var msg=document.getElementById('msg');
-  if(!sid){msg.textContent='No session';return;}
-  v.src='/api/sessions/'+encodeURIComponent(sid)+'/video';
+  if(!eid){msg.textContent='No episode';return;}
+  v.src='/api/episodes/'+encodeURIComponent(eid)+'/video';
   v.load();
   var wasPlaying=false, synced=false;
 

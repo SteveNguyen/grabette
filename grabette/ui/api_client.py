@@ -25,7 +25,6 @@ class GrabetteClient:
     # -- Camera --
 
     def get_snapshot(self) -> bytes | None:
-        """Get a single camera frame (JPEG or BMP bytes)."""
         try:
             r = self._http.get("/api/camera/snapshot")
             r.raise_for_status()
@@ -36,7 +35,6 @@ class GrabetteClient:
     # -- Sensor state --
 
     def get_state(self) -> dict | None:
-        """Get current sensor state (IMU sample + capture status)."""
         try:
             r = self._http.get("/api/state")
             r.raise_for_status()
@@ -56,7 +54,7 @@ class GrabetteClient:
 
     def start_capture(self) -> dict:
         try:
-            r = self._http.post("/api/sessions/start")
+            r = self._http.post("/api/episodes/start")
             r.raise_for_status()
             return r.json()
         except httpx.HTTPStatusError as e:
@@ -67,7 +65,7 @@ class GrabetteClient:
 
     def stop_capture(self) -> dict:
         try:
-            r = self._http.post("/api/sessions/stop")
+            r = self._http.post("/api/episodes/stop")
             r.raise_for_status()
             return r.json()
         except httpx.HTTPStatusError as e:
@@ -86,16 +84,69 @@ class GrabetteClient:
         except Exception:
             return []
 
-    def download_session(self, session_id: str) -> str | None:
-        """Download session tar.gz, return local file path."""
+    def create_session(self, name: str, description: str = "") -> dict:
+        try:
+            r = self._http.post(
+                "/api/sessions",
+                json={"name": name, "description": description},
+            )
+            r.raise_for_status()
+            return r.json()
+        except httpx.HTTPStatusError as e:
+            detail = e.response.json().get("detail", str(e))
+            return {"error": detail}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def update_session(self, session_id: str, name: str | None = None, description: str | None = None) -> dict:
+        body = {}
+        if name is not None:
+            body["name"] = name
+        if description is not None:
+            body["description"] = description
+        try:
+            r = self._http.put(f"/api/sessions/{session_id}", json=body)
+            r.raise_for_status()
+            return r.json()
+        except httpx.HTTPStatusError as e:
+            detail = e.response.json().get("detail", str(e))
+            return {"error": detail}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def delete_session(self, session_id: str) -> dict:
+        try:
+            r = self._http.delete(f"/api/sessions/{session_id}")
+            r.raise_for_status()
+            return r.json()
+        except httpx.HTTPStatusError as e:
+            detail = e.response.json().get("detail", str(e))
+            return {"error": detail}
+        except Exception as e:
+            return {"error": str(e)}
+
+    # -- Episodes --
+
+    def delete_episode(self, episode_id: str) -> dict:
+        try:
+            r = self._http.delete(f"/api/episodes/{episode_id}")
+            r.raise_for_status()
+            return r.json()
+        except httpx.HTTPStatusError as e:
+            detail = e.response.json().get("detail", str(e))
+            return {"error": detail}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def download_episode(self, episode_id: str) -> str | None:
         try:
             r = self._http.get(
-                f"/api/sessions/{session_id}/download",
+                f"/api/episodes/{episode_id}/download",
                 timeout=60.0,
             )
             r.raise_for_status()
             path = os.path.join(
-                tempfile.gettempdir(), f"{session_id}.tar.gz"
+                tempfile.gettempdir(), f"{episode_id}.tar.gz"
             )
             with open(path, "wb") as f:
                 f.write(r.content)
@@ -103,9 +154,12 @@ class GrabetteClient:
         except Exception:
             return None
 
-    def delete_session(self, session_id: str) -> dict:
+    def move_episodes(self, episode_ids: list[str], target_session_id: str) -> dict:
         try:
-            r = self._http.delete(f"/api/sessions/{session_id}")
+            r = self._http.post(
+                "/api/episodes/move",
+                json={"episode_ids": episode_ids, "target_session_id": target_session_id},
+            )
             r.raise_for_status()
             return r.json()
         except httpx.HTTPStatusError as e:
@@ -145,10 +199,10 @@ class GrabetteClient:
         except Exception as e:
             return {"authenticated": False, "error": str(e)}
 
-    def hf_upload_session(self, session_id: str, repo_id: str) -> dict:
+    def hf_upload_episode(self, episode_id: str, repo_id: str) -> dict:
         try:
             r = self._http.post(
-                f"/api/hf/upload/{session_id}",
+                f"/api/hf/upload/{episode_id}",
                 json={"repo_id": repo_id},
             )
             r.raise_for_status()
@@ -177,9 +231,9 @@ class GrabetteClient:
 
     # -- Replay --
 
-    def replay_start(self, session_id: str) -> dict:
+    def replay_start(self, episode_id: str) -> dict:
         try:
-            r = self._http.post("/api/replay/start", json={"session_id": session_id})
+            r = self._http.post("/api/replay/start", json={"episode_id": episode_id})
             r.raise_for_status()
             return r.json()
         except httpx.HTTPStatusError as e:
@@ -226,15 +280,14 @@ class GrabetteClient:
             r.raise_for_status()
             return r.json()
         except Exception:
-            return {"active": False, "session_id": None, "time_ms": 0, "duration_ms": 0, "playing": False}
+            return {"active": False, "episode_id": None, "time_ms": 0, "duration_ms": 0, "playing": False}
 
     # -- SLAM --
 
-    def slam_run(self, session_id: str, repo_id: str) -> dict:
-        """Trigger SLAM processing for a session."""
+    def slam_run(self, episode_id: str, repo_id: str) -> dict:
         try:
             r = self._http.post(
-                f"/api/hf/slam/{session_id}",
+                f"/api/hf/slam/{episode_id}",
                 json={"repo_id": repo_id},
                 timeout=30.0,
             )

@@ -1,4 +1,4 @@
-"""HuggingFace Hub integration for session upload and cloud SLAM."""
+"""HuggingFace Hub integration for episode upload and cloud SLAM."""
 
 from __future__ import annotations
 
@@ -45,16 +45,16 @@ class HuggingFaceClient:
         except Exception:
             return None
 
-    def upload_session(
+    def upload_episode(
         self,
-        session_dir: Path,
+        episode_dir: Path,
         repo_id: str,
         progress_callback=None,
     ) -> str:
-        """Upload a session directory to HuggingFace Hub.
+        """Upload an episode directory to HuggingFace Hub.
 
         Args:
-            session_dir: Path to session directory containing raw_video.mp4 + imu_data.json
+            episode_dir: Path to episode directory containing raw_video.mp4 + imu_data.json
             repo_id: HuggingFace repo ID (e.g., "username/grabette-data")
             progress_callback: Optional callable(percent: float, message: str)
 
@@ -62,7 +62,7 @@ class HuggingFaceClient:
             URL of the uploaded data on HuggingFace Hub.
         """
         api = self._get_api()
-        session_id = session_dir.name
+        episode_id = episode_dir.name
 
         if progress_callback:
             progress_callback(0.0, "Creating repository...")
@@ -73,17 +73,17 @@ class HuggingFaceClient:
         if progress_callback:
             progress_callback(10.0, "Uploading files...")
 
-        # Upload the session directory
+        # Upload the episode directory
         api.upload_folder(
-            folder_path=str(session_dir),
+            folder_path=str(episode_dir),
             repo_id=repo_id,
             repo_type="dataset",
-            path_in_repo=f"sessions/{session_id}",
+            path_in_repo=f"episodes/{episode_id}",
         )
 
         if progress_callback:
             progress_callback(100.0, "Upload complete")
 
-        url = f"https://huggingface.co/datasets/{repo_id}/tree/main/sessions/{session_id}"
-        logger.info("Session %s uploaded to %s", session_id, url)
+        url = f"https://huggingface.co/datasets/{repo_id}/tree/main/episodes/{episode_id}"
+        logger.info("Episode %s uploaded to %s", episode_id, url)
         return url

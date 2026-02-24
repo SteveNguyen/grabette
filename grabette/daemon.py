@@ -144,17 +144,17 @@ class Daemon:
     def generation(self) -> int:
         return self._generation
 
-    async def start_replay(self, session_dir: str, session_id: str) -> None:
+    async def start_replay(self, episode_dir: str, episode_id: str) -> None:
         from grabette.replay import ReplayEngine
 
         if self._replay is not None and self._replay.active:
             await self._replay.stop()
         engine = ReplayEngine()
-        engine.load(session_dir, session_id)
+        engine.load(episode_dir, episode_id)
         await engine.start()
         self._replay = engine
         self._generation += 1
-        logger.info("Replay started for %s (gen %d)", session_id, self._generation)
+        logger.info("Replay started for %s (gen %d)", episode_id, self._generation)
 
     async def stop_replay(self) -> None:
         if self._replay is not None:
@@ -181,4 +181,4 @@ class Daemon:
     def replay_status(self) -> dict:
         if self._replay is not None:
             return self._replay.status
-        return {"active": False, "session_id": None, "time_ms": 0, "duration_ms": 0, "playing": False}
+        return {"active": False, "episode_id": None, "time_ms": 0, "duration_ms": 0, "playing": False}

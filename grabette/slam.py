@@ -19,33 +19,33 @@ class SlamOrchestrator:
 
     async def run_slam(
         self,
-        session_id: str,
-        session_dir: Path,
+        episode_id: str,
+        episode_dir: Path,
         repo_id: str,
         hf_client,
     ) -> str:
         """Start a SLAM job. Returns the job ID for tracking.
 
         Args:
-            session_id: Capture session identifier.
-            session_dir: Local path to session data.
+            episode_id: Capture episode identifier.
+            episode_dir: Local path to episode data.
             repo_id: HuggingFace dataset repo (e.g. "user/grabette-data").
             hf_client: Authenticated HuggingFaceClient instance.
         """
-        job = self._jm.create_job(f"slam:{session_id}")
+        job = self._jm.create_job(f"slam:{episode_id}")
         job_id = job.job_id
 
         async def _run():
             try:
-                # Step 1: Upload session to HF
-                self._jm.update_progress(job_id, 5.0, "Uploading session...")
+                # Step 1: Upload episode to HF
+                self._jm.update_progress(job_id, 5.0, "Uploading episode...")
 
                 def progress_cb(pct: float, msg: str):
                     mapped = 5.0 + pct * 0.45  # 5% -> 50%
                     self._jm.update_progress(job_id, mapped, msg)
 
                 url = await asyncio.to_thread(
-                    hf_client.upload_session, session_dir, repo_id, progress_cb,
+                    hf_client.upload_episode, episode_dir, repo_id, progress_cb,
                 )
 
                 # Step 2: Trigger SLAM processing (placeholder)
@@ -60,12 +60,12 @@ class SlamOrchestrator:
                 #   - External API call to SLAM service
                 logger.warning(
                     "SLAM compute not yet configured. "
-                    "Session uploaded to: %s", url,
+                    "Episode uploaded to: %s", url,
                 )
 
                 self._jm.update_progress(
                     job_id, 90.0,
-                    "Session uploaded; SLAM compute not yet configured",
+                    "Episode uploaded; SLAM compute not yet configured",
                 )
                 self._jm.complete_job(job_id, url)
 

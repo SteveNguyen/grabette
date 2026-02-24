@@ -1,4 +1,4 @@
-"""Replay engine — loads a recorded session and feeds samples into a SampleRing at real-time rate."""
+"""Replay engine — loads a recorded episode and feeds samples into a SampleRing at real-time rate."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class ReplayEngine:
     def __init__(self) -> None:
         self.ring = SampleRing(maxlen=500)
-        self._session_id: str | None = None
+        self._episode_id: str | None = None
         self._duration_ms: float = 0
         self._imu_samples: list[dict] = []   # {"t", "a", "g"}
         self._angle_samples: list[dict] = []  # {"t", "p", "d"}
@@ -35,15 +35,15 @@ class ReplayEngine:
     def status(self) -> dict:
         return {
             "active": self._active,
-            "session_id": self._session_id,
+            "episode_id": self._episode_id,
             "time_ms": self._playback_ms,
             "duration_ms": self._duration_ms,
             "playing": self._playing,
         }
 
-    def load(self, session_dir: str, session_id: str) -> None:
-        """Load imu_data.json + metadata.json from a session directory."""
-        path = Path(session_dir)
+    def load(self, episode_dir: str, episode_id: str) -> None:
+        """Load imu_data.json + metadata.json from an episode directory."""
+        path = Path(episode_dir)
 
         # Load duration from metadata
         meta_path = path / "metadata.json"
@@ -56,7 +56,7 @@ class ReplayEngine:
         # Load IMU data
         imu_path = path / "imu_data.json"
         if not imu_path.exists():
-            raise FileNotFoundError(f"No imu_data.json in {session_dir}")
+            raise FileNotFoundError(f"No imu_data.json in {episode_dir}")
 
         with open(imu_path) as f:
             data = json.load(f)
@@ -97,10 +97,10 @@ class ReplayEngine:
         if self._duration_ms == 0 and self._imu_times:
             self._duration_ms = self._imu_times[-1]
 
-        self._session_id = session_id
+        self._episode_id = episode_id
         logger.info(
             "Replay loaded: %s — %d IMU, %d angle samples, %.1fs",
-            session_id, len(self._imu_samples), len(self._angle_samples),
+            episode_id, len(self._imu_samples), len(self._angle_samples),
             self._duration_ms / 1000,
         )
 
@@ -164,7 +164,7 @@ class ReplayEngine:
                         self._playback_ms = self._duration_ms
                         self._push_window(prev, self._playback_ms)
                         self._playing = False
-                        logger.info("Replay reached end of session")
+                        logger.info("Replay reached end of episode")
                         # Stay active but paused at end
                         continue
                     self._push_window(prev, self._playback_ms)

@@ -44,9 +44,9 @@ def check_auth(hf: HuggingFaceClient = Depends(get_hf_client)):
     return {"authenticated": True, "user": info}
 
 
-@router.post("/upload/{session_id}")
-async def upload_session(
-    session_id: str,
+@router.post("/upload/{episode_id}")
+async def upload_episode(
+    episode_id: str,
     req: UploadRequest,
     hf: HuggingFaceClient = Depends(get_hf_client),
     sm: SessionManager = Depends(get_session_manager),
@@ -55,13 +55,13 @@ async def upload_session(
         raise HTTPException(status_code=401, detail="Not authenticated with HuggingFace")
 
     try:
-        session = sm.get_session(session_id)
+        sm.get_episode(episode_id)
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail="Episode not found")
 
-    session_dir = sm._session_dir(session_id)
+    episode_dir = sm.episode_dir(episode_id)
     jm = get_job_manager()
-    job = jm.create_job(f"upload:{session_id}")
+    job = jm.create_job(f"upload:{episode_id}")
 
     async def _run_upload():
         try:
@@ -71,7 +71,7 @@ async def upload_session(
                 jm.update_progress(job.job_id, pct, msg)
 
             url = await asyncio.to_thread(
-                hf.upload_session, session_dir, req.repo_id, progress_cb
+                hf.upload_episode, episode_dir, req.repo_id, progress_cb
             )
             jm.complete_job(job.job_id, url)
         except Exception as e:
@@ -115,42 +115,42 @@ def get_job(job_id: str):
     }
 
 
-@router.post("/slam/{session_id}")
+@router.post("/slam/{episode_id}")
 async def run_slam(
-    session_id: str,
+    episode_id: str,
     req: UploadRequest,
     hf: HuggingFaceClient = Depends(get_hf_client),
     sm: SessionManager = Depends(get_session_manager),
 ):
-    """Upload a session and trigger SLAM processing."""
+    """Upload an episode and trigger SLAM processing."""
     if not hf.is_authenticated:
         raise HTTPException(status_code=401, detail="Not authenticated with HuggingFace")
 
     try:
-        sm.get_session(session_id)
+        sm.get_episode(episode_id)
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail="Episode not found")
 
-    session_dir = sm._session_dir(session_id)
+    episode_dir = sm.episode_dir(episode_id)
 
     from grabette.slam import get_slam_orchestrator
     slam = get_slam_orchestrator()
-    job_id = await slam.run_slam(session_id, session_dir, req.repo_id, hf)
+    job_id = await slam.run_slam(episode_id, episode_dir, req.repo_id, hf)
 
     return {"job_id": job_id, "status": "started"}
 
 
-@router.websocket("/upload/{session_id}/ws")
-async def upload_progress_ws(ws: WebSocket, session_id: str):
-    """Stream upload progress for a session."""
+@router.websocket("/upload/{episode_id}/ws")
+async def upload_progress_ws(ws: WebSocket, episode_id: str):
+    """Stream upload progress for an episode."""
     await ws.accept()
     jm = get_job_manager()
     try:
         while True:
-            # Find the most recent upload job for this session
+            # Find the most recent upload job for this episode
             job = None
             for j in reversed(jm.list_jobs()):
-                if j.name == f"upload:{session_id}":
+                if j.name == f"upload:{episode_id}":
                     job = j
                     break
             if job:
