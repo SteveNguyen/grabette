@@ -128,6 +128,11 @@ class RpiBackend(Backend):
 
         self._capture_session_dir = session_dir
 
+        # Set flag BEFORE starting streams so the daemon poll loop
+        # (get_state) reads from capture buffers instead of doing
+        # direct I2C reads that would contend with capture threads.
+        self._capturing = True
+
         # Start synchronized capture — all streams share the same
         # SyncManager t=0 reference (time.monotonic based).
         self._sync.start()
@@ -136,14 +141,15 @@ class RpiBackend(Backend):
             self._angle.start_capture()
         self._camera.start_recording(session_dir / "raw_video.mp4")
 
-        self._capturing = True
         logger.info("RpiBackend capture started → %s", session_dir)
 
     async def stop_capture(self) -> CaptureStatus:
         if not self._capturing:
             raise RuntimeError("Not capturing")
 
-        self._capturing = False
+        # Keep _capturing = True until ALL streams have stopped.
+        # This prevents the daemon poll loop (get_state) from doing
+        # direct I2C reads while capture threads are still running.
 
         # Grab sync-clock duration before stopping streams (monotonic,
         # same clock used by all stream timestamps — no wall-clock drift).
@@ -162,14 +168,31 @@ class RpiBackend(Backend):
             angle_samples = angle_data.samples if angle_data.samples else None
         frame_timestamps = self._camera.stop()
 
+        # NOW safe to clear flag — all streams stopped, no I2C contention.
+        self._capturing = False
+
         duration = round(duration_ms / 1000.0, 2)
 
         # Compute actual video FPS from frame timestamps
         actual_fps = float(FPS)
+        video_span_ms = 0.0
         if len(frame_timestamps) >= 2:
             video_span_ms = frame_timestamps[-1] - frame_timestamps[0]
             if video_span_ms > 0:
                 actual_fps = round((len(frame_timestamps) - 1) / (video_span_ms / 1000.0), 3)
+
+        # Diagnostic: compare video and IMU durations
+        imu_span_ms = 0.0
+        if len(imu_samples.accel) >= 2:
+            imu_span_ms = imu_samples.accel[-1]["cts"] - imu_samples.accel[0]["cts"]
+        if video_span_ms > 0 and imu_span_ms > 0:
+            drift_pct = abs(video_span_ms - imu_span_ms) / video_span_ms * 100
+            logger.info("Sync diagnostic: video=%.1fms (%d frames, %.1f fps), "
+                        "IMU=%.1fms (%d samples), drift=%.2f%%",
+                        video_span_ms, len(frame_timestamps), actual_fps,
+                        imu_span_ms, len(imu_samples.accel), drift_pct)
+            if drift_pct > 2.0:
+                logger.warning("Video-IMU drift %.2f%% exceeds 2%% threshold", drift_pct)
 
         status = CaptureStatus(
             is_capturing=False,
