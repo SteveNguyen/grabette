@@ -68,6 +68,12 @@ uv run python main.py
 ### Raspberry Pi
 
 ```bash
+sudo cp config/config.txt /boot/firmware
+```
+Then reboot
+
+```bash
+sudo apt update && sudo apt install libcap-dev
 uv venv --python 3.11 --system-site-packages
 uv sync --extra rpi --extra ui
 uv run python -m grabette
