@@ -39,9 +39,9 @@ def read_status(i2c) -> dict:
     val = buf[0]
     return {
         "raw": val,
-        "magnet_detected": bool(val & 0x20),
-        "magnet_too_weak": bool(val & 0x10),
-        "magnet_too_strong": bool(val & 0x08),
+        "magnet_detected": bool(val & 0x08),   # bit 3: MD
+        "magnet_too_weak": bool(val & 0x10),    # bit 4: ML
+        "magnet_too_strong": bool(val & 0x20),  # bit 5: MH
     }
 
 
@@ -59,7 +59,11 @@ def main():
         while True:
             angle = read_angle(i2c)
             agc = read_agc(i2c)
-            print(f"\r  Angle: {angle:6.1f}°   AGC: {agc:3d}/255", end="", flush=True)
+            status = read_status(i2c)
+            md = "MD" if status["magnet_detected"] else "  "
+            ml = "ML" if status["magnet_too_weak"] else "  "
+            mh = "MH" if status["magnet_too_strong"] else "  "
+            print(f"\r  Angle: {angle:6.1f}°   AGC: {agc:3d}/255   Status: 0x{status['raw']:02X} [{md} {ml} {mh}]", end="", flush=True)
             time.sleep(0.1)
     except KeyboardInterrupt:
         print("\nDone")
