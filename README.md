@@ -91,6 +91,23 @@ sudo systemctl enable --now grabette
 journalctl -u grabette -f
 ```
 
+### Bluetooth WiFi configuration
+
+A standalone BLE GATT service allows configuring WiFi credentials without SSH or a screen. Connect from a phone or laptop via Bluetooth Low Energy, authenticate with a PIN, and send WiFi credentials.
+
+```bash
+sudo apt install python3-dbus python3-gi   # system deps (usually pre-installed)
+sudo cp systemd/grabette-bluetooth.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now grabette-bluetooth
+```
+
+**Important**: set `ControllerMode = le` in `/etc/bluetooth/main.conf` to disable classic Bluetooth (prevents audio profile interference and hostname leak). See the gripette [Bluetooth setup guide](https://github.com/SteveNguyen/gripette/blob/main/docs/bluetooth_setup.md) for detailed instructions.
+
+PIN is configurable via `GRABETTE_BT_PIN` env var (default: `00000`).
+
+**Web Bluetooth client**: open the [BT Tool](https://stevenguyen.github.io/gripette/) in Chrome/Edge — select "Grabette" from the dropdown to connect (also available locally at `docs/index.html`).
+
 ## Configuration
 
 All settings via environment variables with `GRABETTE_` prefix:
