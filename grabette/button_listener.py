@@ -34,8 +34,12 @@ class ButtonListener:
         """Start listening. Must be called from the async event loop thread."""
         self._loop = loop
         try:
+            from grabette.config import settings
             from grabette.hardware.button import LedButton
-            self._button = LedButton()
+            self._button = LedButton(
+                led_pin=settings.button_led_pin,
+                button_pin=settings.button_pin,
+            )
         except Exception as e:
             logger.info("Button not available: %s", e)
             return

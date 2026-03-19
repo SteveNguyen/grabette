@@ -57,10 +57,12 @@ def check_camera():
 
 
 def check_imu():
-    section("IMU (BMI088, I2C bus 3)")
+    from grabette.config import settings
+    bus = settings.imu_i2c_bus
+    section(f"IMU (BMI088, I2C bus {bus})")
     try:
         from adafruit_extended_bus import ExtendedI2C
-        i2c = ExtendedI2C(3)
+        i2c = ExtendedI2C(bus)
 
         # Check accelerometer chip ID (should be 0x1E)
         buf = bytearray(1)
@@ -102,12 +104,14 @@ def check_imu():
 
 
 def check_angle_sensors():
+    from grabette.config import settings
     section("Angle Sensors (AS5600)")
     try:
         from adafruit_extended_bus import ExtendedI2C
         results = []
 
-        for bus_num, name in [(4, "Proximal"), (5, "Distal")]:
+        for bus_num, name in [(settings.angle_i2c_bus_1, "Proximal"),
+                              (settings.angle_i2c_bus_2, "Distal")]:
             try:
                 i2c = ExtendedI2C(bus_num)
 
@@ -145,7 +149,10 @@ def check_angle_sensors():
 
 
 def check_button():
-    section("Button (Grove LED, GPIO22/23)")
+    from grabette.config import settings
+    led_pin = settings.button_led_pin
+    btn_pin = settings.button_pin
+    section(f"Button (Grove LED, GPIO{led_pin}/{btn_pin})")
     try:
         import gpiod
         from gpiod.line import Bias, Direction, Value
@@ -166,22 +173,22 @@ def check_button():
         # Test LED
         led_req = gpiod.request_lines(
             chip_path, consumer="test",
-            config={22: gpiod.LineSettings(direction=Direction.OUTPUT)},
+            config={led_pin: gpiod.LineSettings(direction=Direction.OUTPUT)},
         )
-        led_req.set_value(22, Value.ACTIVE)
+        led_req.set_value(led_pin, Value.ACTIVE)
         time.sleep(0.2)
-        led_req.set_value(22, Value.INACTIVE)
+        led_req.set_value(led_pin, Value.INACTIVE)
         led_req.release()
-        ok(f"LED blinked on {chip_path} pin 22")
+        ok(f"LED blinked on {chip_path} pin {led_pin}")
 
         # Test button read
         btn_req = gpiod.request_lines(
             chip_path, consumer="test",
-            config={23: gpiod.LineSettings(
+            config={btn_pin: gpiod.LineSettings(
                 direction=Direction.INPUT, bias=Bias.PULL_UP,
             )},
         )
-        val = btn_req.get_value(23)
+        val = btn_req.get_value(btn_pin)
         btn_req.release()
         pressed = (val == Value.INACTIVE)
         ok(f"Button state: {'PRESSED' if pressed else 'released'}")

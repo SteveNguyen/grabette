@@ -120,9 +120,14 @@ All settings via environment variables with `GRABETTE_` prefix:
 | `GRABETTE_DATA_DIR` | `~/grabette-data` | Data storage directory |
 | `GRABETTE_CAMERA_FPS` | `46` | Camera frame rate |
 | `GRABETTE_IMU_HZ` | `200` | IMU sample rate |
+| `GRABETTE_IMU_I2C_BUS` | `3` | I2C bus for BMI088 (Pi 4: 3, Pi Zero 2W: 1) |
 | `GRABETTE_ANGLE_SENSORS` | `true` | Enable AS5600 angle sensors |
+| `GRABETTE_ANGLE_I2C_BUS_1` | `4` | I2C bus for proximal AS5600 (Pi 4: 4, Pi Zero 2W: 3) |
+| `GRABETTE_ANGLE_I2C_BUS_2` | `5` | I2C bus for distal AS5600 (Pi 4: 5, Pi Zero 2W: 4) |
 | `GRABETTE_UI_ENABLED` | `true` | Enable Gradio dashboard |
 | `GRABETTE_BUTTON_ENABLED` | `true` | Enable hardware button |
+| `GRABETTE_BUTTON_LED_PIN` | `22` | GPIO pin for LED (Pi 4: 22, Pi Zero 2W: 12) |
+| `GRABETTE_BUTTON_PIN` | `23` | GPIO pin for button (Pi 4: 23, Pi Zero 2W: 13) |
 | `GRABETTE_LOG_LEVEL` | `INFO` | Logging level |
 
 ## Data

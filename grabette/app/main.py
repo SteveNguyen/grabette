@@ -36,13 +36,23 @@ def _create_backend():
     elif settings.backend == "rpi":
         from grabette.backend.rpi import RpiBackend
         logger.info("Using RpiBackend (forced by config)")
-        return RpiBackend(enable_angle=settings.angle_sensors)
+        return RpiBackend(
+            enable_angle=settings.angle_sensors,
+            imu_i2c_bus=settings.imu_i2c_bus,
+            angle_i2c_bus_1=settings.angle_i2c_bus_1,
+            angle_i2c_bus_2=settings.angle_i2c_bus_2,
+        )
     else:  # auto
         try:
             from grabette.backend.rpi import RpiBackend
             import picamera2  # noqa: F401
             logger.info("RPi hardware detected, using RpiBackend")
-            return RpiBackend(enable_angle=settings.angle_sensors)
+            return RpiBackend(
+                enable_angle=settings.angle_sensors,
+                imu_i2c_bus=settings.imu_i2c_bus,
+                angle_i2c_bus_1=settings.angle_i2c_bus_1,
+                angle_i2c_bus_2=settings.angle_i2c_bus_2,
+            )
         except ImportError:
             from grabette.backend.mock import MockBackend
             logger.info("No RPi hardware, using MockBackend")

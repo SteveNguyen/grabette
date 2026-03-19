@@ -1,0 +1,59 @@
+# Grabette config.txt for Raspberry Pi Zero 2W with Grove Base Hat Zero
+#
+# Copy to /boot/firmware/config.txt and reboot.
+# Also copy cmdline_zero.txt to /boot/firmware/cmdline.txt (single line, no breaks).
+#
+# Grove connector mapping:
+#   I2C connector (GPIO 2/3, hw I2C-1) → BMI088 IMU
+#   D5 connector  (GPIO 5/6, sw I2C-3) → AS5600 proximal angle sensor
+#   D16 connector (GPIO 16/17, sw I2C-4) → AS5600 distal angle sensor
+#   PWM connector (GPIO 12/13)          → Grove LED Button
+#   CSI ribbon                          → Camera
+#
+# Required env vars (in systemd unit or .env):
+#   GRABETTE_IMU_I2C_BUS=1
+#   GRABETTE_ANGLE_I2C_BUS_1=3
+#   GRABETTE_ANGLE_I2C_BUS_2=4
+#   GRABETTE_BUTTON_LED_PIN=12
+#   GRABETTE_BUTTON_PIN=13
+
+# For more options and information see
+# http://rptl.io/configtxt
+
+# Enable I2C (hw bus 1 for BMI088 via Grove I2C connector)
+dtparam=i2c_arm=on
+
+# Enable audio (loads snd_bcm2835)
+dtparam=audio=on
+
+# Automatically load overlays for detected cameras
+camera_auto_detect=1
+
+# Automatically load overlays for detected DSI displays
+display_auto_detect=1
+
+# Automatically load initramfs files, if found
+auto_initramfs=1
+
+# Enable DRM VC4 V3D driver
+dtoverlay=vc4-kms-v3d
+max_framebuffers=2
+
+# Don't have the firmware create an initial video= setting in cmdline.txt.
+disable_fw_kms_setup=1
+
+# Run in 64-bit mode
+arm_64bit=1
+
+# Disable compensation for displays with overscan
+disable_overscan=1
+
+# Run as fast as firmware / board allows
+arm_boost=1
+
+[all]
+# Software I2C for angle sensors (AS5600, same address 0x36, need separate buses)
+# Proximal on Grove D5 connector
+dtoverlay=i2c-gpio,bus=3,i2c_gpio_sda=5,i2c_gpio_scl=6,i2c_gpio_delay_us=2
+# Distal on Grove D16 connector
+dtoverlay=i2c-gpio,bus=4,i2c_gpio_sda=16,i2c_gpio_scl=17,i2c_gpio_delay_us=2

@@ -21,12 +21,21 @@ IMU_HZ = 200
 class RpiBackend(Backend):
     """Backend using real RPi camera and BMI088 IMU hardware."""
 
-    def __init__(self, enable_angle: bool = False) -> None:
+    def __init__(
+        self,
+        enable_angle: bool = False,
+        imu_i2c_bus: int = 3,
+        angle_i2c_bus_1: int = 4,
+        angle_i2c_bus_2: int = 5,
+    ) -> None:
         self._running = False
         self._start_time: float | None = None
         self._capturing = False
         self._capture_session_dir: Path | None = None
         self._enable_angle = enable_angle
+        self._imu_i2c_bus = imu_i2c_bus
+        self._angle_i2c_bus_1 = angle_i2c_bus_1
+        self._angle_i2c_bus_2 = angle_i2c_bus_2
 
         self._sync = None
         self._camera = None
@@ -40,7 +49,7 @@ class RpiBackend(Backend):
 
         self._sync = SyncManager()
         self._camera = VideoCapture(self._sync, fps=FPS)
-        self._imu = BMI088Capture(self._sync, sample_rate_hz=IMU_HZ)
+        self._imu = BMI088Capture(self._sync, sample_rate_hz=IMU_HZ, i2c_bus=self._imu_i2c_bus)
 
         logger.info("Initializing camera...")
         self._camera.init_camera()
@@ -58,7 +67,11 @@ class RpiBackend(Backend):
     def _init_angle_sensors(self) -> None:
         try:
             from grabette.hardware.angle import AngleCapture
-            self._angle = AngleCapture(self._sync)
+            self._angle = AngleCapture(
+                self._sync,
+                i2c_bus_1=self._angle_i2c_bus_1,
+                i2c_bus_2=self._angle_i2c_bus_2,
+            )
             self._angle.init_sensors()
             logger.info("Angle sensors initialized")
         except Exception:
@@ -229,7 +242,7 @@ class RpiBackend(Backend):
         from grabette.hardware.imu import BMI088Capture
         from grabette.hardware.camera import VideoCapture
         self._camera = VideoCapture(self._sync, fps=FPS)
-        self._imu = BMI088Capture(self._sync, sample_rate_hz=IMU_HZ)
+        self._imu = BMI088Capture(self._sync, sample_rate_hz=IMU_HZ, i2c_bus=self._imu_i2c_bus)
         self._camera.init_camera()
         self._imu.init_sensor()
         if self._enable_angle:
