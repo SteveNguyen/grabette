@@ -1,11 +1,29 @@
 """Grabette hardware diagnostic — checks all sensors and peripherals.
 
-Run on the Pi 4:
+Run on the Pi:
     python scripts/check_hardware.py
 """
 
+import os
 import sys
 import time
+from pathlib import Path
+
+# Load .env if present
+_env_file = Path(__file__).resolve().parent.parent / ".env"
+if _env_file.exists():
+    for line in _env_file.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, _, val = line.partition("=")
+            os.environ.setdefault(key.strip(), val.strip())
+
+# Config from env vars (defaults match Pi 4)
+IMU_I2C_BUS = int(os.environ.get("GRABETTE_IMU_I2C_BUS", 3))
+ANGLE_I2C_BUS_1 = int(os.environ.get("GRABETTE_ANGLE_I2C_BUS_1", 4))
+ANGLE_I2C_BUS_2 = int(os.environ.get("GRABETTE_ANGLE_I2C_BUS_2", 5))
+BUTTON_LED_PIN = int(os.environ.get("GRABETTE_BUTTON_LED_PIN", 22))
+BUTTON_PIN = int(os.environ.get("GRABETTE_BUTTON_PIN", 23))
 
 
 def section(name):
@@ -57,8 +75,7 @@ def check_camera():
 
 
 def check_imu():
-    from grabette.config import settings
-    bus = settings.imu_i2c_bus
+    bus = IMU_I2C_BUS
     section(f"IMU (BMI088, I2C bus {bus})")
     try:
         from adafruit_extended_bus import ExtendedI2C
@@ -104,14 +121,13 @@ def check_imu():
 
 
 def check_angle_sensors():
-    from grabette.config import settings
     section("Angle Sensors (AS5600)")
     try:
         from adafruit_extended_bus import ExtendedI2C
         results = []
 
-        for bus_num, name in [(settings.angle_i2c_bus_1, "Proximal"),
-                              (settings.angle_i2c_bus_2, "Distal")]:
+        for bus_num, name in [(ANGLE_I2C_BUS_1, "Proximal"),
+                              (ANGLE_I2C_BUS_2, "Distal")]:
             try:
                 i2c = ExtendedI2C(bus_num)
 
@@ -149,9 +165,8 @@ def check_angle_sensors():
 
 
 def check_button():
-    from grabette.config import settings
-    led_pin = settings.button_led_pin
-    btn_pin = settings.button_pin
+    led_pin = BUTTON_LED_PIN
+    btn_pin = BUTTON_PIN
     section(f"Button (Grove LED, GPIO{led_pin}/{btn_pin})")
     try:
         import gpiod
