@@ -54,10 +54,7 @@ class _RecordingState:
     def stop_recording(self) -> None:
         with self._lock:
             self._recording = False
-            if self._r_hand_traj and self._r_hand_path:
-                self._r_hand_path.write_text(json.dumps(self._r_hand_traj, indent=2))
-            if self._l_hand_traj and self._l_hand_path:
-                self._l_hand_path.write_text(json.dumps(self._l_hand_traj, indent=2))
+            self._flush_to_disk()
             total = self._total
         logger.info("gRPC recording stopped (%d frames received)", total)
 
@@ -75,7 +72,7 @@ class _RecordingState:
         return True
 
     def append_hand_entry(self, entry: dict, side: int) -> bool:
-        """Append a hand pose entry. Returns False if not recording."""
+        """Append a hand pose entry in memory. Returns False if not recording."""
         with self._lock:
             now = time.time()
             if side == _RIGHT:
@@ -86,14 +83,12 @@ class _RecordingState:
                 return False
             if side == _RIGHT:
                 self._r_hand_traj.append(entry)
-                self._r_hand_path.write_text(json.dumps(self._r_hand_traj, indent=2))
             elif side == _LEFT:
                 self._l_hand_traj.append(entry)
-                self._l_hand_path.write_text(json.dumps(self._l_hand_traj, indent=2))
         return True
 
     def append_hand_entries_bulk(self, r_entries: list, l_entries: list) -> bool:
-        """Bulk-append hand entries. Returns False if not recording."""
+        """Bulk-append hand entries in memory. Returns False if not recording."""
         with self._lock:
             now = time.time()
             if r_entries:
@@ -104,28 +99,19 @@ class _RecordingState:
                 return False
             self._r_hand_traj.extend(r_entries)
             self._l_hand_traj.extend(l_entries)
-            if r_entries and self._r_hand_path:
-                self._r_hand_path.write_text(json.dumps(self._r_hand_traj, indent=2))
-            if l_entries and self._l_hand_path:
-                self._l_hand_path.write_text(json.dumps(self._l_hand_traj, indent=2))
         return True
 
-    def flush_hand_entries(self, r_entries: list, l_entries: list) -> None:
-        """Save hand entries even if recording has already stopped (session path must exist)."""
+    def _flush_to_disk(self) -> None:
+        """Write in-memory traj lists to disk. Must be called with self._lock held."""
+        if self._r_hand_traj and self._r_hand_path:
+            self._r_hand_path.write_text(json.dumps(self._r_hand_traj, indent=2))
+        if self._l_hand_traj and self._l_hand_path:
+            self._l_hand_path.write_text(json.dumps(self._l_hand_traj, indent=2))
+
+    def flush_to_disk(self) -> None:
+        """Write in-memory traj to disk regardless of recording state."""
         with self._lock:
-            now = time.time()
-            if r_entries:
-                self._last_r_hand_ts = now
-            if l_entries:
-                self._last_l_hand_ts = now
-            if not self._r_hand_path:
-                return
-            self._r_hand_traj.extend(r_entries)
-            self._l_hand_traj.extend(l_entries)
-            if r_entries:
-                self._r_hand_path.write_text(json.dumps(self._r_hand_traj, indent=2))
-            if l_entries:
-                self._l_hand_path.write_text(json.dumps(self._l_hand_traj, indent=2))
+            self._flush_to_disk()
 
 
     def get_activity(self, stale_s: float = 3.0) -> dict:
@@ -201,16 +187,11 @@ class GrpcServer:
                 return frames_pb2.FrameResponse(success=True)
 
             def StreamHandFrame(self, request_iterator, context):
-                r_entries, l_entries = [], []
                 try:
                     for frame in request_iterator:
-                        entry = _frame_to_hand_entry(frame)
-                        if frame.side == _RIGHT:
-                            r_entries.append(entry)
-                        elif frame.side == _LEFT:
-                            l_entries.append(entry)
+                        state.append_hand_entry(_frame_to_hand_entry(frame), frame.side)
                 finally:
-                    state.flush_hand_entries(r_entries, l_entries)
+                    state.flush_to_disk()
                 return frames_pb2.FrameResponse(success=True)
 
             def SendAllFrames(self, all_frames, context):
@@ -225,16 +206,17 @@ class GrpcServer:
                 return frames_pb2.FrameResponse(success=True)
 
             def StreamAllFrames(self, request_iterator, context):
-                r_entries, l_entries = [], []
                 try:
                     for af in request_iterator:
                         state.save_camera_frame(
                             af.camera_frame.timestamp_ms, af.camera_frame.jpeg_data
                         )
-                        r_entries.append(_frame_to_hand_entry(af.r_hand_frame))
-                        l_entries.append(_frame_to_hand_entry(af.l_hand_frame))
+                        state.append_hand_entries_bulk(
+                            [_frame_to_hand_entry(af.r_hand_frame)],
+                            [_frame_to_hand_entry(af.l_hand_frame)],
+                        )
                 finally:
-                    state.flush_hand_entries(r_entries, l_entries)
+                    state.flush_to_disk()
                 return frames_pb2.FrameResponse(success=True)
 
         self._server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
