@@ -28,3 +28,7 @@ urdf = [
 ui = [
     "gradio>=5.0.0",
 ]
+grpc = [
+    "grpcio>=1.59.0",
+    "protobuf>=4.25.0",
+]

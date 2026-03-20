@@ -58,6 +58,16 @@ async def lifespan(app: FastAPI):
     import asyncio
 
     backend = _create_backend()
+
+    # Start gRPC server and wrap backend with recording hooks
+    _grpc_server = None
+    if settings.grpc_enabled:
+        from grabette.grpc_server import GrpcServer
+        from grabette.backend.grpc_wrapper import GrpcBackend
+        _grpc_server = GrpcServer(host=settings.grpc_host, port=settings.grpc_port)
+        if _grpc_server.start():
+            backend = GrpcBackend(backend, _grpc_server)
+
     _daemon = Daemon(backend)
     await _daemon.start()
 
@@ -80,6 +90,9 @@ async def lifespan(app: FastAPI):
         _button_listener = None
     await _daemon.stop()
     _daemon = None
+    if _grpc_server is not None:
+        _grpc_server.stop()
+        _grpc_server = None
 
 
 def create_app() -> FastAPI:

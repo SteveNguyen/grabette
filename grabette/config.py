@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     # Hardware button (Grove LED Button on GPIO22/23)
     button_enabled: bool = True
 
+    # gRPC server
+    grpc_enabled: bool = True
+    grpc_host: str = "0.0.0.0"
+    grpc_port: int = 50051
+
     # Logging
     log_level: str = "INFO"
 
