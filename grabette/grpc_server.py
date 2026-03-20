@@ -94,6 +94,18 @@ class _RecordingState:
                 self._l_hand_path.write_text(json.dumps(self._l_hand_traj, indent=2))
         return True
 
+    def flush_hand_entries(self, r_entries: list, l_entries: list) -> None:
+        """Save hand entries even if recording has already stopped (session path must exist)."""
+        with self._lock:
+            if not self._r_hand_path:
+                return
+            self._r_hand_traj.extend(r_entries)
+            self._l_hand_traj.extend(l_entries)
+            if r_entries:
+                self._r_hand_path.write_text(json.dumps(self._r_hand_traj, indent=2))
+            if l_entries:
+                self._l_hand_path.write_text(json.dumps(self._l_hand_traj, indent=2))
+
 
 def _frame_to_hand_entry(frame) -> dict:
     return {
@@ -144,13 +156,15 @@ class GrpcServer:
 
             def StreamHandFrame(self, request_iterator, context):
                 r_entries, l_entries = [], []
-                for frame in request_iterator:
-                    entry = _frame_to_hand_entry(frame)
-                    if frame.side == _RIGHT:
-                        r_entries.append(entry)
-                    elif frame.side == _LEFT:
-                        l_entries.append(entry)
-                state.append_hand_entries_bulk(r_entries, l_entries)
+                try:
+                    for frame in request_iterator:
+                        entry = _frame_to_hand_entry(frame)
+                        if frame.side == _RIGHT:
+                            r_entries.append(entry)
+                        elif frame.side == _LEFT:
+                            l_entries.append(entry)
+                finally:
+                    state.flush_hand_entries(r_entries, l_entries)
                 return frames_pb2.FrameResponse(success=True)
 
             def SendAllFrames(self, all_frames, context):
@@ -166,13 +180,15 @@ class GrpcServer:
 
             def StreamAllFrames(self, request_iterator, context):
                 r_entries, l_entries = [], []
-                for af in request_iterator:
-                    state.save_camera_frame(
-                        af.camera_frame.timestamp_ms, af.camera_frame.jpeg_data
-                    )
-                    r_entries.append(_frame_to_hand_entry(af.r_hand_frame))
-                    l_entries.append(_frame_to_hand_entry(af.l_hand_frame))
-                state.append_hand_entries_bulk(r_entries, l_entries)
+                try:
+                    for af in request_iterator:
+                        state.save_camera_frame(
+                            af.camera_frame.timestamp_ms, af.camera_frame.jpeg_data
+                        )
+                        r_entries.append(_frame_to_hand_entry(af.r_hand_frame))
+                        l_entries.append(_frame_to_hand_entry(af.l_hand_frame))
+                finally:
+                    state.flush_hand_entries(r_entries, l_entries)
                 return frames_pb2.FrameResponse(success=True)
 
         self._server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
