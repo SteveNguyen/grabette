@@ -44,6 +44,7 @@ class VideoCapture:
         self._output_path: Path | None = None
         self._h264_path: Path | None = None
         self._frame_timestamps: list[float] = []
+        self._frame_count: int = 0
         self._recording = False
         self._first_sensor_ts: int | None = None
         self._sync_offset_ms: float = 0.0
@@ -83,19 +84,19 @@ class VideoCapture:
         self._picam2.start()
 
     def _on_frame(self, request) -> None:
-        if self._recording:
+        if not self._recording:
+            return
+        # On the first frame only: read hardware timestamp to anchor the sync clock.
+        # For subsequent frames, only increment the counter — avoids holding the
+        # picamera2 CompletedRequest buffer while waiting for the Python GIL (which
+        # can be held by gRPC workers), preventing ISP buffer exhaustion and frame drops.
+        if self._first_sensor_ts is None:
             metadata = request.get_metadata()
             sensor_ts_ns = metadata.get("SensorTimestamp")
-
             if sensor_ts_ns is not None:
-                if self._first_sensor_ts is None:
-                    self._first_sensor_ts = sensor_ts_ns
-                    self._sync_offset_ms = self.sync.get_timestamp_ms()
-                ts = (sensor_ts_ns - self._first_sensor_ts) / 1_000_000.0 + self._sync_offset_ms
-            else:
-                ts = self.sync.get_timestamp_ms()
-
-            self._frame_timestamps.append(ts)
+                self._first_sensor_ts = sensor_ts_ns
+            self._sync_offset_ms = self.sync.get_timestamp_ms()
+        self._frame_count += 1
 
     def start_recording(self, output_path: Path) -> None:
         if self._recording:
@@ -108,6 +109,7 @@ class VideoCapture:
         self._output_path = Path(output_path)
         self._h264_path = self._output_path.with_suffix(".h264")
         self._frame_timestamps = []
+        self._frame_count = 0
         self._first_sensor_ts = None
         self._sync_offset_ms = 0.0
 
@@ -131,6 +133,16 @@ class VideoCapture:
         self._picam2 = None
         self._encoder = None
 
+        # Reconstruct per-frame timestamps from the sync anchor (first frame) and
+        # the declared CFR interval. Since the encoder runs at a fixed hardware rate,
+        # this is more accurate than per-frame sensor-timestamp collection (which can
+        # miss frames when the Python GIL is contested by gRPC workers).
+        interval_ms = 1000.0 / self.fps
+        self._frame_timestamps = [
+            self._sync_offset_ms + i * interval_ms
+            for i in range(self._frame_count)
+        ]
+
         self._mux_to_mp4()
         return self._frame_timestamps
 
@@ -140,15 +152,12 @@ class VideoCapture:
         if not self._h264_path.exists():
             raise RuntimeError(f"H.264 file not found: {self._h264_path}")
 
-        actual_fps = self.fps
-        if len(self._frame_timestamps) >= 2:
-            duration_ms = self._frame_timestamps[-1] - self._frame_timestamps[0]
-            if duration_ms > 0:
-                actual_fps = (len(self._frame_timestamps) - 1) / (duration_ms / 1000.0)
-
+        # Use the declared CFR rate — the hardware encoder guarantees this cadence
+        # regardless of Python-side callback timing. Calculating FPS from timestamps
+        # would propagate any GIL-induced jitter into the video container timing.
         cmd = [
             "ffmpeg", "-y", "-fflags", "+genpts",
-            "-r", str(actual_fps), "-i", str(self._h264_path),
+            "-r", str(self.fps), "-i", str(self._h264_path),
             "-c", "copy", "-video_track_timescale", "90000",
             str(self._output_path),
         ]
@@ -159,4 +168,5 @@ class VideoCapture:
 
     @property
     def frame_count(self) -> int:
-        return len(self._frame_timestamps)
+        # During recording _frame_timestamps is empty (built on stop); use the live counter.
+        return self._frame_count if self._recording else len(self._frame_timestamps)
