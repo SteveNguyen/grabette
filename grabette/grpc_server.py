@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
-import shutil
+import os
+import queue
 import subprocess
 import threading
 import time
@@ -29,8 +30,7 @@ class _RecordingState:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._recording = False
-        self._camera_dir: Path | None = None        # active write dir (RAM or persistent)
-        self._camera_dir_final: Path | None = None  # persistent destination on SD card
+        self._camera_dir: Path | None = None
         self._r_hand_path: Path | None = None
         self._l_hand_path: Path | None = None
         self._total = 0
@@ -40,33 +40,35 @@ class _RecordingState:
         self._last_camera_ts: float = 0.0
         self._last_r_hand_ts: float = 0.0
         self._last_l_hand_ts: float = 0.0
+        # Dedicated low-priority I/O thread for JPEG writes
+        self._write_queue: queue.Queue = queue.Queue()
+        self._io_thread: threading.Thread | None = None
 
     def start_recording(self, session_dir: Path) -> None:
-        # Persistent destination on SD card (created now so it's ready for the move)
-        camera_dir_final = session_dir / "grpc_camera_frames"
-        camera_dir_final.mkdir(parents=True, exist_ok=True)
-
-        # Write frames to RAM during recording to avoid I/O contention with the
-        # H.264 encoder stream. Falls back to the persistent dir if /dev/shm is
-        # unavailable (non-Linux environments).
-        shm = Path("/dev/shm")
-        if shm.is_dir():
-            camera_dir = shm / f"grabette_{session_dir.name}"
-            camera_dir.mkdir(parents=True, exist_ok=True)
-            logger.info("gRPC frames → RAM (%s), will move to %s on stop", camera_dir, camera_dir_final)
-        else:
-            camera_dir = camera_dir_final
-            logger.info("gRPC frames → %s (/dev/shm unavailable)", camera_dir_final)
+        camera_dir = session_dir / "grpc_camera_frames"
+        camera_dir.mkdir(parents=True, exist_ok=True)
 
         with self._lock:
             self._camera_dir = camera_dir
-            self._camera_dir_final = camera_dir_final
             self._r_hand_path = session_dir / "r_hand_traj.json"
             self._l_hand_path = session_dir / "l_hand_traj.json"
             self._total = 0
             self._r_hand_traj = []
             self._l_hand_traj = []
             self._recording = True
+
+        # Fresh queue + dedicated low-priority I/O thread for this recording.
+        # gRPC workers hand off JPEG bytes here and return immediately, so they
+        # never block on SD card latency. The thread serialises writes and runs
+        # at reduced CPU priority (nice +10) to avoid competing with the camera
+        # pipeline for scheduler time.
+        self._write_queue = queue.Queue()
+        self._io_thread = threading.Thread(
+            target=self._io_worker,
+            daemon=True,
+            name="grpc-io",
+        )
+        self._io_thread.start()
         logger.info("gRPC recording started → %s", session_dir)
 
     def stop_accepting(self) -> None:
@@ -75,29 +77,44 @@ class _RecordingState:
         with self._lock:
             self._recording = False
 
+    def _io_worker(self) -> None:
+        """Dedicated low-priority thread that writes JPEG frames to SD sequentially."""
+        try:
+            os.nice(10)
+        except OSError:
+            logger.debug("gRPC: could not lower I/O thread priority (nice +10)")
+
+        while True:
+            item = self._write_queue.get()
+            if item is None:  # sentinel: recording finished, drain complete
+                self._write_queue.task_done()
+                break
+            path, data = item
+            try:
+                path.write_bytes(data)
+            except Exception as e:
+                logger.warning("gRPC: failed to write frame %s: %s", path.name, e)
+            self._write_queue.task_done()
+
     def stop_recording(self) -> None:
         with self._lock:
             self._recording = False  # idempotent if stop_accepting() was called first
-            self._flush_to_disk()
             total = self._total
-        # Intentionally no file I/O here. Frames stay in /dev/shm until
-        # mux_camera_frames_to_mp4() runs, so that the mux reads from RAM
-        # and does not compete with the next recording's H.264 SD writes.
+
+        # Drain the write queue: wait for all pending JPEG writes to complete
+        # before flushing trajectories and handing off to the mux thread.
+        if self._io_thread is not None:
+            self._write_queue.put(None)  # sentinel
+            self._io_thread.join()
+            self._io_thread = None
+
+        with self._lock:
+            self._flush_to_disk()
+
         logger.info("gRPC recording stopped (%d frames received)", total)
 
-    def _move_frames_to_persistent(self, src: Path, dst: Path) -> None:
-        """Move JPEG frames from RAM (/dev/shm) to persistent storage."""
-        frames = sorted(src.glob("frame_*.jpg"))
-        logger.info("gRPC: moving %d frames from RAM to persistent storage", len(frames))
-        for f in frames:
-            shutil.move(str(f), dst / f.name)
-        try:
-            src.rmdir()
-        except OSError:
-            pass
-
     def save_camera_frame(self, timestamp_ms: int, jpeg_data: bytes) -> bool:
-        """Save JPEG frame to disk. Returns False if not recording."""
+        """Enqueue a JPEG frame for writing. Returns False if not recording."""
         with self._lock:
             self._last_camera_ts = time.time()
             if not self._recording:
@@ -106,7 +123,7 @@ class _RecordingState:
             n = self._total
             camera_dir = self._camera_dir
         filename = f"frame_{timestamp_ms:016d}_{n:06d}.jpg"
-        (camera_dir / filename).write_bytes(jpeg_data)
+        self._write_queue.put((camera_dir / filename, jpeg_data))
         return True
 
     def append_hand_entry(self, entry: dict, side: int) -> bool:
@@ -152,29 +169,15 @@ class _RecordingState:
             self._flush_to_disk()
 
     def mux_camera_frames_to_mp4(self) -> None:
-        """Assemble gRPC JPEG frames into an MP4 using ffmpeg.
-
-        Reads frames from their current location (RAM if /dev/shm was used).
-        Writes the MP4 directly to the persistent session directory.
-        Only moves individual JPEG frames to persistent storage after the mux
-        completes, so SD I/O does not overlap with an ongoing recording.
-        """
+        """Assemble gRPC JPEG frames into an MP4 using ffmpeg."""
         with self._lock:
-            src_dir = self._camera_dir
-            final_dir = self._camera_dir_final
-
-        if src_dir is None or not src_dir.is_dir():
+            camera_dir = self._camera_dir
+        if camera_dir is None or not camera_dir.is_dir():
             return
 
-        frames = sorted(src_dir.glob("frame_*.jpg"))
+        frames = sorted(camera_dir.glob("frame_*.jpg"))
         if len(frames) < 2:
             logger.info("gRPC: not enough frames to create MP4 (%d)", len(frames))
-            # Clean up empty RAM dir if needed
-            if final_dir and src_dir != final_dir:
-                try:
-                    src_dir.rmdir()
-                except OSError:
-                    pass
             return
 
         # Parse timestamps from filenames: frame_{timestamp_ms:016d}_{n:06d}.jpg
@@ -187,8 +190,7 @@ class _RecordingState:
         duration_ms = ts_list[-1] - ts_list[0]
         fps = (len(ts_list) - 1) / (duration_ms / 1000.0) if duration_ms > 0 else 30.0
 
-        # Write concat list in the source dir (alongside the frames, for relative paths)
-        concat_path = src_dir / "frames.txt"
+        concat_path = camera_dir / "frames.txt"
         lines = []
         for i, f in enumerate(frames):
             lines.append(f"file '{f.name}'")
@@ -196,11 +198,7 @@ class _RecordingState:
             lines.append(f"duration {duration_s:.6f}")
         concat_path.write_text("\n".join(lines))
 
-        # MP4 goes to the persistent session directory regardless of where frames are.
-        # This means ffmpeg reads from RAM and writes one sequential file to SD —
-        # much less disruptive to concurrent SD writes than reading many small files.
-        output_dir = final_dir.parent if final_dir else src_dir.parent
-        output_path = output_dir / "grpc_video.mp4"
+        output_path = camera_dir.parent / "grpc_video.mp4"
         cmd = [
             "ffmpeg", "-y",
             "-f", "concat", "-safe", "0", "-i", str(concat_path),
@@ -214,13 +212,6 @@ class _RecordingState:
             logger.warning("gRPC: ffmpeg failed: %s", result.stderr[-300:])
         else:
             logger.info("gRPC: video saved → %s (%.1f fps, %d frames)", output_path, fps, len(frames))
-
-        # Move individual JPEG frames to persistent storage now that the mux is done.
-        # Doing this after the mux ensures no concurrent SD read pressure during recording.
-        if final_dir and src_dir != final_dir:
-            self._move_frames_to_persistent(src_dir, final_dir)
-            with self._lock:
-                self._camera_dir = final_dir
 
 
     def get_activity(self, stale_s: float = 3.0) -> dict:
