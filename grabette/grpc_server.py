@@ -114,57 +114,6 @@ class _RecordingState:
         with self._lock:
             self._flush_to_disk()
 
-    def mux_camera_frames_to_mp4(self) -> None:
-        """Assemble gRPC JPEG frames into an MP4 using ffmpeg (same approach as raw_video)."""
-        with self._lock:
-            camera_dir = self._camera_dir
-        if camera_dir is None or not camera_dir.is_dir():
-            return
-
-        frames = sorted(camera_dir.glob("frame_*.jpg"))
-        if len(frames) < 2:
-            logger.info("gRPC: not enough frames to create MP4 (%d)", len(frames))
-            return
-
-        # Parse timestamps from filenames: frame_{timestamp_ms:016d}_{n:06d}.jpg
-        try:
-            ts_list = [int(f.stem.split("_")[1]) for f in frames]
-        except (IndexError, ValueError):
-            logger.warning("gRPC: could not parse timestamps from frame filenames")
-            return
-
-        duration_ms = ts_list[-1] - ts_list[0]
-        if duration_ms > 0:
-            fps = (len(ts_list) - 1) / (duration_ms / 1000.0)
-        else:
-            fps = 30.0
-
-        # Write a concat list with per-frame durations for accurate timing
-        concat_path = camera_dir / "frames.txt"
-        lines = []
-        for i, f in enumerate(frames):
-            lines.append(f"file '{f.name}'")
-            if i + 1 < len(ts_list):
-                duration_s = (ts_list[i + 1] - ts_list[i]) / 1000.0
-            else:
-                duration_s = 1.0 / fps
-            lines.append(f"duration {duration_s:.6f}")
-        concat_path.write_text("\n".join(lines))
-
-        output_path = camera_dir.parent / "grpc_video.mp4"
-        cmd = [
-            "ffmpeg", "-y",
-            "-f", "concat", "-safe", "0", "-i", str(concat_path),
-            "-vf", "format=yuv420p",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            str(output_path),
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        concat_path.unlink(missing_ok=True)
-        if result.returncode != 0:
-            logger.warning("gRPC: ffmpeg failed: %s", result.stderr[-300:])
-        else:
-            logger.info("gRPC: video saved → %s (%.1f fps, %d frames)", output_path, fps, len(frames))
 
 
     def get_activity(self, stale_s: float = 3.0) -> dict:
@@ -190,6 +139,51 @@ class _RecordingState:
             "r_hand": _info(r_age),
             "l_hand": _info(l_age),
         }
+
+
+def mux_grpc_video(episode_dir: Path) -> None:
+    """Assemble gRPC JPEG frames from an episode directory into grpc_video.mp4."""
+    camera_dir = episode_dir / "grpc_camera_frames"
+    if not camera_dir.is_dir():
+        return
+
+    frames = sorted(camera_dir.glob("frame_*.jpg"))
+    if len(frames) < 2:
+        logger.info("gRPC: not enough frames to create MP4 (%d)", len(frames))
+        return
+
+    # Parse timestamps from filenames: frame_{timestamp_ms:016d}_{n:06d}.jpg
+    try:
+        ts_list = [int(f.stem.split("_")[1]) for f in frames]
+    except (IndexError, ValueError):
+        logger.warning("gRPC: could not parse timestamps from frame filenames")
+        return
+
+    duration_ms = ts_list[-1] - ts_list[0]
+    fps = (len(ts_list) - 1) / (duration_ms / 1000.0) if duration_ms > 0 else 30.0
+
+    concat_path = camera_dir / "frames.txt"
+    lines = []
+    for i, f in enumerate(frames):
+        lines.append(f"file '{f.name}'")
+        duration_s = (ts_list[i + 1] - ts_list[i]) / 1000.0 if i + 1 < len(ts_list) else 1.0 / fps
+        lines.append(f"duration {duration_s:.6f}")
+    concat_path.write_text("\n".join(lines))
+
+    output_path = episode_dir / "grpc_video.mp4"
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "concat", "-safe", "0", "-i", str(concat_path),
+        "-vf", "format=yuv420p",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        str(output_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    concat_path.unlink(missing_ok=True)
+    if result.returncode != 0:
+        logger.warning("gRPC: ffmpeg failed: %s", result.stderr[-300:])
+    else:
+        logger.info("gRPC: video saved → %s (%.1f fps, %d frames)", output_path, fps, len(frames))
 
 
 def _frame_to_hand_entry(frame) -> dict:
@@ -292,11 +286,6 @@ class GrpcServer:
     def stop_recording(self) -> None:
         if self._state is not None:
             self._state.stop_recording()
-            threading.Thread(
-                target=self._state.mux_camera_frames_to_mp4,
-                daemon=True,
-                name="grpc-mux",
-            ).start()
 
     def get_status(self) -> dict:
         """Return gRPC server status and client activity."""
