@@ -70,7 +70,7 @@ class VideoCapture:
                 controls={"FrameDurationLimits": (frame_duration_us, frame_duration_us)},
             )
         self._picam2.configure(video_config)
-        self._encoder = H264Encoder(bitrate=self.bitrate, num_video_buffers=12)
+        self._encoder = H264Encoder(bitrate=self.bitrate)
 
         if self.preview:
             try:
