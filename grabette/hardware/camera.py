@@ -3,6 +3,7 @@
 Ported from grabette-capture/grabette_capture/video.py.
 """
 
+import gc
 import logging
 import subprocess
 from pathlib import Path
@@ -58,14 +59,14 @@ class VideoCapture:
 
         if self.preview:
             video_config = self._picam2.create_video_configuration(
-                main={"size": self.resolution, "format": "RGB888"},
+                main={"size": self.resolution, "format": "YUV420"},
                 lores={"size": (640, 480), "format": "YUV420"},
                 display="lores",
                 controls={"FrameDurationLimits": (frame_duration_us, frame_duration_us)},
             )
         else:
             video_config = self._picam2.create_video_configuration(
-                main={"size": self.resolution, "format": "RGB888"},
+                main={"size": self.resolution, "format": "YUV420"},
                 controls={"FrameDurationLimits": (frame_duration_us, frame_duration_us)},
             )
         self._picam2.configure(video_config)
@@ -111,8 +112,8 @@ class VideoCapture:
         self._first_sensor_ts = None
         self._sync_offset_ms = 0.0
 
-        self._picam2.pre_callback = self._on_frame
         self._recording = True
+        gc.disable()  # Prevent GC pauses from dropping frames during recording
         self._picam2.start_encoder(self._encoder, str(self._h264_path))
 
     def stop(self) -> list[float]:
@@ -121,6 +122,7 @@ class VideoCapture:
 
         self._recording = False
         self._picam2.stop_encoder()
+        gc.enable()
         if self.preview:
             try:
                 self._picam2.stop_preview()
