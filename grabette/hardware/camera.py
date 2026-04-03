@@ -112,7 +112,6 @@ class VideoCapture:
         self._first_sensor_ts = None
         self._sync_offset_ms = 0.0
 
-        self._picam2.post_callback = self._on_frame
         self._recording = True
         gc.disable()  # Prevent GC pauses from dropping frames during recording
         self._picam2.start_encoder(self._encoder, str(self._h264_path))

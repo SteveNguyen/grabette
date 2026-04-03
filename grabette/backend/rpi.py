@@ -223,7 +223,6 @@ class RpiBackend(Backend):
             }
             (self._capture_session_dir / "metadata.json").write_text(json.dumps(meta, indent=2))
 
-
         self._sync.reset()
 
         # Re-initialize hardware for next capture
